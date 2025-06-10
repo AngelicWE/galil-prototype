@@ -1,20 +1,18 @@
 package csw.proto.galil.simulator
 
 import java.net.{InetAddress, NetworkInterface}
+import org.apache.pekko.{Done, actor}
+import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
+import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.actor.typed.{ActorRef, ActorSystem, SpawnProtocol}
+import org.apache.pekko.stream.Materializer
+import org.apache.pekko.stream.scaladsl.Tcp.{IncomingConnection, ServerBinding}
+import org.apache.pekko.stream.scaladsl.{Flow, Framing, Source, Tcp}
+import org.apache.pekko.util.{ByteString, Timeout}
+import csw.logging.client.commons.PekkoTypedExtension.UserActorFactory
+import csw.proto.galil.simulator.GalilSimulatorActor.*
 
-import akka.Done
-import akka.actor.ActorSystem
-import akka.actor.typed.scaladsl.AskPattern._
-import akka.actor.typed.scaladsl.Behaviors
-import akka.actor.typed.{ActorRef, SpawnProtocol}
-import akka.stream.Materializer
-import akka.stream.scaladsl.Tcp.{IncomingConnection, ServerBinding}
-import akka.stream.scaladsl.{Flow, Framing, Source, Tcp}
-import akka.util.{ByteString, Timeout}
-import csw.logging.client.commons.AkkaTypedExtension.UserActorFactory
-import csw.proto.galil.simulator.GalilSimulatorActor._
-
-import scala.concurrent.duration._
+import scala.concurrent.duration.*
 import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success, Try}
 
@@ -24,12 +22,11 @@ import scala.util.{Failure, Success, Try}
  * @param host host to bind to listen for new client connections
  * @param port port to use to listen for new client connections
  */
-case class GalilSimulator(host: String = "127.0.0.1", port: Int = 8888)(implicit system: ActorSystem) {
+case class GalilSimulator(host: String = "127.0.0.1", port: Int = 8888)(implicit typedSystem: ActorSystem[SpawnProtocol.Command]) {
 
-  implicit val mat: Materializer                 = Materializer(system)
-  implicit lazy val ec: ExecutionContextExecutor = system.dispatcher
-  implicit lazy val typedSystem: akka.actor.typed.ActorSystem[SpawnProtocol.Command] =
-    akka.actor.typed.ActorSystem(SpawnProtocol(), "typed-system")
+  implicit val classicSystem: actor.ActorSystem = typedSystem.classicSystem
+  implicit val mat: Materializer                 = Materializer(classicSystem)
+  implicit lazy val ec: ExecutionContextExecutor = classicSystem.dispatcher
   implicit val timeout: Timeout = Timeout(3.seconds)
 
   // Keep track of current connections, needed to simulate TH command

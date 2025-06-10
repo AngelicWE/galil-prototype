@@ -2,9 +2,9 @@ package csw.proto.galil.hcd
 
 import java.io.IOException
 
-import akka.actor.typed.Behavior
-import akka.actor.typed.scaladsl.Behaviors
-import akka.util.ByteString
+import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.util.ByteString
 import csw.command.client.CommandResponseManager
 import csw.framework.CurrentStatePublisher
 import csw.logging.client.scaladsl.LoggerFactory
@@ -136,10 +136,6 @@ private[hcd] object GalilIOActor {
             val response = galilSend(commandString)
             handleGalilResponse(response, runId, maybeObsId, commandKey)
           }
-          Behaviors.same
-
-        case _ =>
-          log.debug("unhanded GalilCommandMessage")
           Behaviors.same
       }
     }

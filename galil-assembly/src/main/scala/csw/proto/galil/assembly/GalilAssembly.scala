@@ -1,7 +1,7 @@
 package csw.proto.galil.assembly
 
-import akka.actor.typed.scaladsl.ActorContext
-import akka.util.Timeout
+import org.apache.pekko.actor.typed.scaladsl.ActorContext
+import org.apache.pekko.util.Timeout
 import com.typesafe.config.ConfigFactory
 import csw.command.api.scaladsl.CommandService
 import csw.command.client.CommandServiceFactory
@@ -9,7 +9,7 @@ import csw.command.client.messages.TopLevelActorMessage
 import csw.framework.deploy.containercmd.ContainerCmd
 import csw.framework.models.CswContext
 import csw.framework.scaladsl.ComponentHandlers
-import csw.location.api.models.{AkkaLocation, LocationRemoved, LocationUpdated, TrackingEvent}
+import csw.location.api.models.{PekkoLocation, LocationRemoved, LocationUpdated, TrackingEvent}
 import csw.params.commands.CommandResponse.{Completed, Error, SubmitResponse, ValidateCommandResponse}
 import csw.params.commands.{CommandResponse, ControlCommand, Setup}
 import csw.params.core.models.Id
@@ -66,7 +66,7 @@ private class GalilAssemblyHandlers(ctx: ActorContext[TopLevelActorMessage], csw
     log.debug(s"onLocationTrackingEvent called: $trackingEvent")
     trackingEvent match {
       case LocationUpdated(location) =>
-        galilHcd = Some(CommandServiceFactory.make(location.asInstanceOf[AkkaLocation])(ctx.system))
+        galilHcd = Some(CommandServiceFactory.make(location.asInstanceOf[PekkoLocation])(ctx.system))
       case LocationRemoved(_) =>
         galilHcd = None
     }
@@ -87,7 +87,9 @@ private class GalilAssemblyHandlers(ctx: ActorContext[TopLevelActorMessage], csw
 }
 
 // Start assembly from the command line using GalilAssembly.conf resource file
-object GalilAssemblyApp extends App {
-  val defaultConfig = ConfigFactory.load("GalilAssembly.conf")
-  ContainerCmd.start("galil.assembly.GalilAssembly", CSW, args, Some(defaultConfig))
+object GalilAssemblyApp {
+  def main(args: Array[String]): Unit = {
+    val defaultConfig = ConfigFactory.load("GalilAssembly.conf")
+    ContainerCmd.start("galil.assembly.GalilAssembly", CSW, args, Some(defaultConfig))
+  }
 }

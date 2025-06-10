@@ -32,7 +32,7 @@ object CSWDeviceAdapter {
   val voltsKey: Key[Double]         = KeyType.DoubleKey.make("volts")
 
   // Map key name to key
-  private val commandParamKeys: List[Key[_]] = List(
+  private val commandParamKeys: List[Key[?]] = List(
     axisKey,
     eDescKey,
     mTypeKey,
@@ -47,7 +47,7 @@ object CSWDeviceAdapter {
     voltsKey
   )
 
-  private val commandParamKeyMap: Map[String, Key[_]] = commandParamKeys.map(k => k.keyName -> k).toMap
+  private val commandParamKeyMap: Map[String, Key[?]] = commandParamKeys.map(k => k.keyName -> k).toMap
 
   // Used to extract parameter names from command
   private val paramRegex = raw"\(([A-Za-z]*)\)".r
@@ -145,8 +145,8 @@ class CSWDeviceAdapter(config: Config) {
   private def makeResultParamSet(
       paramValues: List[String],
       paramDefs: List[ParamDefEntry],
-      paramSet: List[Parameter[_]]
-  ): List[Parameter[_]] = {
+      paramSet: List[Parameter[?]]
+  ): List[Parameter[?]] = {
 
     paramValues.zip(paramDefs).map { pair =>
       val name     = pair._2.name.trim

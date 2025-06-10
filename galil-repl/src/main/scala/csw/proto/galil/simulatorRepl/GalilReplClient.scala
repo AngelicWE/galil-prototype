@@ -1,10 +1,10 @@
 //package csw.proto.galil.simulatorRepl
 //
-//import akka.Done
-//import akka.actor.ActorSystem
-//import akka.stream.ActorMaterializer
-//import akka.stream.scaladsl.{Flow, Source, Tcp}
-//import akka.util.ByteString
+//import org.apache.pekko.Done
+//import org.apache.pekko.actor.ActorSystem
+//import org.apache.pekko.stream.ActorMaterializer
+//import org.apache.pekko.stream.scaladsl.{Flow, Source, Tcp}
+//import org.apache.pekko.util.ByteString
 //
 //import scala.concurrent.Future
 //import scala.io.StdIn
@@ -20,7 +20,7 @@
 //  case class Options(host: String = "127.0.0.1", port: Int = 8888)
 //
 //  // Parses the command line options
-//  private val parser = new scopt.OptionParser[Options]("test-akka-service-app") {
+//  private val parser = new scopt.OptionParser[Options]("test-pekko-service-app") {
 //    head("simulatorrepl", System.getProperty("VERSION"))
 //
 //    opt[String]("host") valueName "<hostname>" action { (x, c) =>

@@ -13,7 +13,7 @@ object CswBuildInfo extends AutoPlugin {
 
   override def requires: Plugins = BuildInfoPlugin
 
-  override def projectSettings: Seq[Setting[_]] = Seq(
+  override def projectSettings: Seq[Setting[?]] = Seq(
     buildInfoKeys := Seq[BuildInfoKey](version),
     buildInfoPackage := "csw.services"
   )

@@ -34,7 +34,7 @@ lazy val `galil-assembly` = project
 lazy val `galil-client` = project
   .enablePlugins(DeployApp)
   .settings(libraryDependencies ++= `GalilClient`)
-  .dependsOn(`galil-io`)
+  .dependsOn(`galil-io`, `galil-simulator`, `galil-hcd` % "test->test")
 
 // A Galil hardware simulator
 lazy val `galil-simulator` = project

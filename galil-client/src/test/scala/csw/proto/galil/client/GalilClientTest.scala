@@ -1,32 +1,31 @@
 package csw.proto.galil.client
 
-import java.net.InetAddress
-import akka.actor.typed.{ActorSystem, SpawnProtocol}
-import akka.util.Timeout
-import csw.location.client.scaladsl.HttpLocationServiceFactory
 import csw.logging.client.scaladsl.{GenericLoggerFactory, LoggingSystemFactory}
 import csw.params.commands.CommandResponse.Completed
 import csw.params.core.generics.KeyType
 import csw.prefix.models.Prefix
 import csw.proto.galil.io.DataRecord.GalilAxisStatus
-import org.scalatest.funsuite.AnyFunSuite
+import csw.proto.galil.simulator.GalilSimulator
+import csw.testkit.scaladsl.CSWService.LocationServer
+import csw.testkit.scaladsl.ScalaTestFrameworkTestKit
+import org.scalatest.funsuite.AnyFunSuiteLike
+import csw.proto.galil.hcd.GalilHcdHandlers
+import java.net.InetAddress
+import scala.concurrent.duration.*
+import scala.concurrent.Await
 
-import scala.concurrent.duration._
-import scala.concurrent.{Await, ExecutionContextExecutor}
+class GalilClientTest extends ScalaTestFrameworkTestKit(LocationServer) with AnyFunSuiteLike {
+  import frameworkTestKit._
 
-// Note: Test assumes that location service, galil-hcd and galil-simulator are running
-//@Ignore
-class GalilClientTest extends AnyFunSuite {
-  implicit val typedSystem: ActorSystem[SpawnProtocol.Command] = ActorSystem(SpawnProtocol(), "GalilClientTest")
-  implicit lazy val ec: ExecutionContextExecutor               = typedSystem.executionContext
-  implicit val timeout: Timeout                                = Timeout(3.seconds)
+  GalilSimulator()
+  Thread.sleep(500)
+  frameworkTestKit.spawnHCD(Prefix("csw.galil.hcd.GalilHcd"), (ctx, cswCtx) => new GalilHcdHandlers(ctx, cswCtx))
 
-  private val locationService = HttpLocationServiceFactory.makeLocalClient
-  private val galilHcdClient  = GalilHcdClient(Prefix("csw.galil.client"), locationService)
+  private val galilHcdClient  = GalilHcdClient(Prefix("csw.galil.client"), locationService)(actorSystem, ec)
   private val maybeObsId      = None
   private val host            = InetAddress.getLocalHost.getHostName
 
-  LoggingSystemFactory.start("GalilClientTest", "0.1", host, typedSystem)
+  LoggingSystemFactory.start("GalilClientTest", "0.1", host, actorSystem)
   private val log = GenericLoggerFactory.getLogger
   log.info("Starting GalilClientTest")
 

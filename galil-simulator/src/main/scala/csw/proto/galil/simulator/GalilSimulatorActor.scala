@@ -1,8 +1,8 @@
 package csw.proto.galil.simulator
 
-import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
-import akka.actor.typed.{ActorRef, Behavior}
-import akka.util.ByteString
+import org.apache.pekko.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
+import org.apache.pekko.actor.typed.{ActorRef, Behavior}
+import org.apache.pekko.util.ByteString
 import csw.proto.galil.io.DataRecord
 import csw.proto.galil.io.DataRecord.{GalilAxisStatus, GeneralState, Header}
 

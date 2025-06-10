@@ -3,7 +3,7 @@ package csw.proto.galil.io
 import java.io.IOException
 import java.nio.{ByteBuffer, ByteOrder}
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 import csw.params.commands.CommandResponse.{Completed, SubmitResponse}
 import csw.params.commands.Result
 import csw.params.core.generics.{Key, KeyType, Parameter}
@@ -47,7 +47,7 @@ case class DataRecord(header: Header, generalState: GeneralState, axisStatuses: 
     buffer.flip()
   }
 
-  def toParamSet: Set[Parameter[_]] = {
+  def toParamSet: Set[Parameter[?]] = {
     val axisStatus = axes.zip(axisStatuses).flatMap { p =>
       // Since the "struct" type is no longer supported, use the implicit "axis" char to build a unique name for
       // the axis parameters
@@ -113,7 +113,7 @@ object DataRecord {
          |Data record size: $recordSize
        """.stripMargin
 
-    def toParamSet: Set[Parameter[_]] =
+    def toParamSet: Set[Parameter[?]] =
       Set(blocksPresentKey.setAll(blocksPresent.toArray))
 
   }
@@ -218,7 +218,7 @@ object DataRecord {
         .putShort(tPlaneBufferSpaceRemaining)
     }
 
-    private def toBinaryString(a: Array[Byte]) = a.map(i => i.toBinaryString).mkString(" ")
+    private def toBinaryString(a: Array[Byte]) = a.map(i => intWrapper(i).toBinaryString).mkString(" ")
 
     override def toString: String =
       s"""
@@ -227,7 +227,7 @@ object DataRecord {
          |Outputs:                        ${toBinaryString(outputs)}
          |Ethernet handle status:         ${ethernetHandleStatus.map(_ & 0xff).mkString(", ")}
          |Error code:                     $errorCode
-         |Thread status:                  ${threadStatus.toBinaryString}
+         |Thread status:                  ${intWrapper(threadStatus).toBinaryString}
          |Amplifier status:               $amplifierStatus
          |Contour mode segment count:                     $contourModeSegmentCount,
          |contour mode buffer space remaining:            ${contourModeBufferSpaceRemaining & 0xffff},
@@ -241,7 +241,7 @@ object DataRecord {
          |T plane buffer space remaining:                 ${tPlaneBufferSpaceRemaining & 0xffff},
        """.stripMargin
 
-    def toParamSet: Set[Parameter[_]] = {
+    def toParamSet: Set[Parameter[?]] = {
       Set(
         sampleNumberKey.set(sampleNumber),
         inputsKey.setAll(inputs),
@@ -482,7 +482,7 @@ object DataRecord {
        """.stripMargin
     }
 
-    def toParamSet(implicit axis: Char): Set[Parameter[_]] = {
+    def toParamSet(implicit axis: Char): Set[Parameter[?]] = {
       Set(
         statusKey.set(status),
         switchesKey.set(switches),

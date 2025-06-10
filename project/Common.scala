@@ -9,7 +9,7 @@ object Common extends AutoPlugin {
 
   override def requires: Plugins = JvmPlugin
 
-  override lazy val projectSettings: Seq[Setting[_]] = Seq(
+  override lazy val projectSettings: Seq[Setting[?]] = Seq(
     organization := "com.github.tmtsoftware.galil",
     organizationName := "TMT",
     scalaVersion := Libs.ScalaVersion,
@@ -21,12 +21,9 @@ object Common extends AutoPlugin {
       "-feature",
       "-unchecked",
       "-deprecation",
-      "-Xlint",
-      "-Ywarn-dead-code",
-      "-Xasync"
     ),
-    javacOptions in (Compile, doc) ++= Seq("-Xdoclint:none"),
-    testOptions in Test ++= Seq(
+    Compile / doc / javacOptions ++= Seq("-Xdoclint:none"),
+    Test / testOptions ++= Seq(
       // show full stack traces and test case durations
       Tests.Argument("-oDF"),
       // -v Log "test run started" / "test started" / "test run finished" events on log level "info" instead of "debug".
@@ -36,9 +33,10 @@ object Common extends AutoPlugin {
     resolvers += "jitpack" at "https://jitpack.io",
     version := "0.0.1",
     fork := true,
-    parallelExecution in Test := false,
+    Test / parallelExecution := false,
     autoCompilerPlugins := true,
-    if (formatOnCompile) scalafmtOnCompile := true else scalafmtOnCompile := false
+//    if (formatOnCompile) scalafmtOnCompile := true else scalafmtOnCompile := false
+    scalafmtOnCompile := false
   )
 
   private def formatOnCompile = sys.props.get("format.on.compile") match {

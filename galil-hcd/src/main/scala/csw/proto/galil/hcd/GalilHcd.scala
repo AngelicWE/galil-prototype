@@ -1,7 +1,7 @@
 package csw.proto.galil.hcd
 
-import akka.actor.typed.ActorRef
-import akka.actor.typed.scaladsl.ActorContext
+import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import com.typesafe.config.ConfigFactory
 import csw.command.client.messages.TopLevelActorMessage
 import csw.framework.deploy.containercmd.ContainerCmd
@@ -30,7 +30,7 @@ object GalilCommandMessage {
 
 }
 
-private class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswContext)
+class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswContext)
     extends ComponentHandlers(ctx, cswCtx) {
 
   import cswCtx._
@@ -132,7 +132,9 @@ private class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: 
   override def onOperationsMode(): Unit = {}
 }
 
-object GalilHcdApp extends App {
-  val defaultConfig = ConfigFactory.load("GalilHcd.conf")
-  ContainerCmd.start("galil.hcd.GalilHcd", CSW, args, Some(defaultConfig))
+object GalilHcdApp {
+  def main(args: Array[String]): Unit = {
+    val defaultConfig = ConfigFactory.load("GalilHcd.conf")
+    ContainerCmd.start("galil.hcd.GalilHcd", CSW, args, Some(defaultConfig))
+  }
 }

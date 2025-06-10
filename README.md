@@ -31,15 +31,13 @@ After this command, you can find the start scripts in ./target/universal/stage/b
 
 ## Prerequisites for running Components
 
-The CSW services need to be running before starting the components. 
+The CSW services need to be running before starting the components.
+(They are started automatically for the tests.)
 See [here](https://tmtsoftware.github.io/csw/apps/csinstallation.html) for how to install csw-services using coursier (cs).
 
 * Run `csw-services start -e` command to start the CSW services: i.e. Location, Event Service.
 
 See [csw-services](https://tmtsoftware.github.io/csw/apps/cswservices.html) for more information.
-
-Alternatively, you can run `scripts/csw-services.sh start -e`, which uses coursier to run the version 
-of csw-services declared by this project in project/build.properties.
 
 ## Running the galil-prototype applications
 
@@ -57,14 +55,4 @@ galil-simulator
 galil-hcd --local galil-hcd/src/main/resources/GalilHcd.conf
 ```
 
-The above two applications must be run to run the tests.
 
-## Loading the galil-prototype project in IntelliJ Idea
-
-To load the project in IntelliJ Idea, select *New => Project from Existing Sources...* from the File menu
-and then select this directory.
-
-## Running or Debugging the Galil HCD from IntelliJ Idea
-
-To run or debug the Galil HCD from IntelliJ Idea, go to the GalilHcdApp class and select *Run GalilHcdApp*.
-Note that this assumes that the location service and config service are running as described above.

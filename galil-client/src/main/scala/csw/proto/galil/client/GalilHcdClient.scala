@@ -2,13 +2,13 @@ package csw.proto.galil.client
 
 import java.io.IOException
 
-import akka.actor.typed.{ActorSystem, SpawnProtocol}
-import akka.util.{ByteString, Timeout}
+import org.apache.pekko.actor.typed.{ActorSystem, SpawnProtocol}
+import org.apache.pekko.util.{ByteString, Timeout}
 import csw.command.api.scaladsl.CommandService
 import csw.command.client.CommandServiceFactory
 import csw.location.api.models.ComponentId
 import csw.location.api.models.ComponentType.HCD
-import csw.location.api.models.Connection.AkkaConnection
+import csw.location.api.models.Connection.PekkoConnection
 import csw.location.api.scaladsl.LocationService
 import csw.params.commands.CommandResponse.Error
 import csw.params.commands.{CommandName, CommandResponse, Setup}
@@ -18,7 +18,7 @@ import csw.prefix.models.Prefix
 import csw.proto.galil.io.DataRecord
 
 import scala.concurrent.duration._
-import scala.concurrent.{ExecutionContextExecutor, Future}
+import scala.concurrent.{ExecutionContext, Future}
 
 /**
  * A client for locating and communicating with the Galil HCD
@@ -28,12 +28,12 @@ import scala.concurrent.{ExecutionContextExecutor, Future}
  */
 case class GalilHcdClient(source: Prefix, locationService: LocationService)(implicit
     typedSystem: ActorSystem[SpawnProtocol.Command],
-    ec: ExecutionContextExecutor
+    ec: ExecutionContext
 ) {
 
   implicit val timeout: Timeout = Timeout(3.seconds)
 
-  private val connection = AkkaConnection(ComponentId(Prefix("csw.galil.hcd.GalilHcd"), HCD))
+  private val connection = PekkoConnection(ComponentId(Prefix("csw.galil.hcd.GalilHcd"), HCD))
 
   private val axisKey: Key[Char]        = KeyType.CharKey.make("axis")
   private val countsKey: Key[Int]       = KeyType.IntKey.make("counts")

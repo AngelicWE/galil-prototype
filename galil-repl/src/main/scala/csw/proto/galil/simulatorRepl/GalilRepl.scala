@@ -1,7 +1,7 @@
 package csw.proto.galil.simulatorRepl
 
-import akka.actor.ActorSystem
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.util.ByteString
 import csw.proto.galil.io.{DataRecord, GalilIoTcp, GalilIoUdp}
 
 import scala.io.StdIn
@@ -9,13 +9,13 @@ import scala.io.StdIn
 /**
  * A command line REPL for a Galil controller (or simulator).
  */
-object GalilRepl extends App {
+object GalilRepl {
   implicit val system: ActorSystem = ActorSystem()
 
-  case class Options(host: String = "127.0.0.1", port: Int = 8888, protocol: String = "tcp")
+  private case class Options(host: String = "127.0.0.1", port: Int = 8888, protocol: String = "tcp")
 
   // Parses the command line options
-  private val parser = new scopt.OptionParser[Options]("test-akka-service-app") {
+  private val parser = new scopt.OptionParser[Options]("test-pekko-service-app") {
     head("simulatorrepl", System.getProperty("VERSION"))
 
     opt[String]("host") valueName "<hostname>" action { (x, c) =>
@@ -34,18 +34,20 @@ object GalilRepl extends App {
     version("version")
   }
 
-  // Parse the command line options
-  parser.parse(args, Options()) match {
-    case Some(options) =>
-      try {
-        run(options)
-      }
-      catch {
-        case e: Throwable =>
-          e.printStackTrace()
-          System.exit(1)
-      }
-    case None => System.exit(1)
+  def main(args: Array[String]): Unit = {
+    // Parse the command line options
+    parser.parse(args, Options()) match {
+      case Some(options) =>
+        try {
+          run(options)
+        }
+        catch {
+          case e: Throwable =>
+            e.printStackTrace()
+            System.exit(1)
+        }
+      case None => System.exit(1)
+    }
   }
 
   private def run(options: Options): Unit = {

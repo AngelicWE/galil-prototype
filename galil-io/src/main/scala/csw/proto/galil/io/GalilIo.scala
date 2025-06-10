@@ -1,6 +1,6 @@
 package csw.proto.galil.io
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import GalilIo._
 

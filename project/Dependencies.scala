@@ -21,6 +21,7 @@ object Dependencies {
 
   val GalilClient = Seq(
     CSW.`csw-framework`,
+    CSW.`csw-testkit`,
     Libs.scalatest % Test
   )
 
@@ -30,7 +31,8 @@ object Dependencies {
   )
 
   val GalilSimulator = Seq(
-    CSW.`csw-framework`
+    CSW.`csw-framework`,
+    Libs.scalatest % Test
   )
 
   val GalilRepl = Seq(

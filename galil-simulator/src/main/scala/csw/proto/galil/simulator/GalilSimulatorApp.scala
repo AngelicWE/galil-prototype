@@ -1,18 +1,19 @@
 package csw.proto.galil.simulator
 
-import akka.actor.ActorSystem
+import org.apache.pekko.actor.typed.{ActorSystem, SpawnProtocol}
+
 
 /**
  * Simulates the protocol used to talk to the Galil hardware.
  */
-object GalilSimulatorApp extends App {
+object GalilSimulatorApp {
 
-  implicit val system: ActorSystem = ActorSystem()
+  implicit val typedSystem: ActorSystem[SpawnProtocol.Command] = ActorSystem(SpawnProtocol(), "GalilSimulatorApp")
 
-  case class Options(host: String = "127.0.0.1", port: Int = 8888)
+  private case class Options(host: String = "127.0.0.1", port: Int = 8888)
 
   // Parses the command line options
-  private val parser = new scopt.OptionParser[Options]("test-akka-service-app") {
+  private val parser = new scopt.OptionParser[Options]("test-pekko-service-app") {
     head("simulator", System.getProperty("VERSION"))
 
     opt[String]("host") valueName "<hostname>" action { (x, c) =>
@@ -27,18 +28,21 @@ object GalilSimulatorApp extends App {
     version("version")
   }
 
-  // Parse the command line options
-  parser.parse(args, Options()) match {
-    case Some(options) =>
-      try {
-        run(options)
-      }
-      catch {
-        case e: Throwable =>
-          e.printStackTrace()
-          System.exit(1)
-      }
-    case None => System.exit(1)
+  def main(args: Array[String]): Unit = {
+
+    // Parse the command line options
+    parser.parse(args, Options()) match {
+      case Some(options) =>
+        try {
+          run(options)
+        }
+        catch {
+          case e: Throwable =>
+            e.printStackTrace()
+            System.exit(1)
+        }
+      case None => System.exit(1)
+    }
   }
 
   private def run(options: Options): Unit = {

@@ -2,16 +2,16 @@ package csw.proto.galil.client
 
 import java.net.InetAddress
 
-import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
-import akka.actor.typed.{ActorSystem, Behavior, SpawnProtocol}
-import akka.util.Timeout
+import org.apache.pekko.actor.typed.scaladsl.{ActorContext, Behaviors}
+import org.apache.pekko.actor.typed.{ActorSystem, Behavior, SpawnProtocol}
+import org.apache.pekko.util.Timeout
 import csw.command.api.scaladsl.CommandService
 import csw.command.client.CommandServiceFactory
 import csw.location.api.models.ComponentType.Assembly
-import csw.location.api.models.Connection.AkkaConnection
+import csw.location.api.models.Connection.PekkoConnection
 import csw.location.api.models._
 import csw.location.client.scaladsl.HttpLocationServiceFactory
-import csw.logging.client.commons.AkkaTypedExtension.UserActorFactory
+import csw.logging.client.commons.PekkoTypedExtension.UserActorFactory
 import csw.logging.client.scaladsl.{GenericLoggerFactory, LoggingSystemFactory}
 import csw.params.commands.{CommandName, Setup}
 import csw.params.core.generics.{Key, KeyType}
@@ -24,7 +24,7 @@ import scala.util.{Failure, Success}
 /**
  * A client to test locating and communicating with the Galil assembly
  */
-object GalilAssemblyClient extends App {
+object GalilAssemblyClient {
 
   implicit val typedSystem: ActorSystem[SpawnProtocol.Command] = ActorSystem(SpawnProtocol(), "GalilAssemblyClient")
   implicit lazy val ec: ExecutionContextExecutor               = typedSystem.executionContext
@@ -37,11 +37,13 @@ object GalilAssemblyClient extends App {
   private val log = GenericLoggerFactory.getLogger
   log.info("Starting GalilAssemblyClient")
 
-  typedSystem.spawn(initialBehavior, "GalilAssemblyClient")
+  def main(args: Array[String]): Unit = {
+    typedSystem.spawn(initialBehavior, "GalilAssemblyClient")
+  }
 
-  def initialBehavior: Behavior[TrackingEvent] =
+  private def initialBehavior: Behavior[TrackingEvent] =
     Behaviors.setup { ctx =>
-      val connection = AkkaConnection(ComponentId(Prefix("csw.galil.assembly.GalilAssembly"), Assembly))
+      val connection = PekkoConnection(ComponentId(Prefix("csw.galil.assembly.GalilAssembly"), Assembly))
       locationService.subscribe(
         connection,
         { loc =>
@@ -51,12 +53,12 @@ object GalilAssemblyClient extends App {
       subscriberBehavior
     }
 
-  def subscriberBehavior: Behavior[TrackingEvent] = {
+  private def subscriberBehavior: Behavior[TrackingEvent] = {
     Behaviors.receive[TrackingEvent] { (ctx, msg) =>
       msg match {
         case LocationUpdated(loc) =>
           log.info(s"LocationUpdated: $loc")
-          interact(ctx, CommandServiceFactory.make(loc.asInstanceOf[AkkaLocation])(ctx.system))
+          interact(ctx, CommandServiceFactory.make(loc.asInstanceOf[PekkoLocation])(ctx.system))
         case LocationRemoved(loc) =>
           log.info(s"LocationRemoved: $loc")
       }

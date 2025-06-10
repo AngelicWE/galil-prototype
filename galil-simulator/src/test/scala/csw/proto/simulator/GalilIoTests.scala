@@ -1,30 +1,29 @@
-package csw.proto.galil.io
+package csw.proto.simulator
 
-import java.net.InetAddress
-import akka.actor.typed.{ActorSystem, SpawnProtocol}
-import akka.util.ByteString
 import csw.logging.client.scaladsl.LoggingSystemFactory
 import csw.params.commands.Result
-import org.scalatest.{BeforeAndAfterAll, Ignore}
+import csw.proto.galil.io.{DataRecord, GalilIoTcp}
+import csw.proto.galil.simulator.GalilSimulator
+import org.apache.pekko.actor.typed.{ActorSystem, SpawnProtocol}
+import org.apache.pekko.util.ByteString
 import org.scalatest.funsuite.AnyFunSuite
+import org.scalatest.{BeforeAndAfterAll, Ignore}
 
+import java.net.InetAddress
 import scala.concurrent.ExecutionContextExecutor
 
 //noinspection ComparingLength
-// Note: Before running this test, start the galil "simulator" script
-//@Ignore
-class GalilIoTests extends AnyFunSuite with BeforeAndAfterAll {
+class GalilIoTests extends AnyFunSuite {
 
   implicit val typedSystem: ActorSystem[SpawnProtocol.Command] = ActorSystem(SpawnProtocol(), "GalilIoTests")
   implicit lazy val ec: ExecutionContextExecutor               = typedSystem.executionContext
   private val localHost                                        = InetAddress.getLocalHost.getHostName
 
   LoggingSystemFactory.start("GalilIoTests", "0.1", localHost, typedSystem)
+
+  private val simulator = GalilSimulator()
+  Thread.sleep(500)
   val galilIo: GalilIoTcp = GalilIoTcp() // default params: "127.0.0.1", 8888, can also use ssh tunnel to test on device
-
-  override def beforeAll(): Unit = {}
-
-  override def afterAll(): Unit = {}
 
   test("Test Galil commands") {
 

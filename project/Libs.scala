@@ -6,17 +6,17 @@ import sbt._
 import scala.util.control.NonFatal
 
 object Libs {
-  val ScalaVersion = "2.13.8"
+  val ScalaVersion: String = "3.6.4"
 
-  val `scopt` = "com.github.scopt" %% "scopt" % "4.0.1" //MIT License
-  val `slf4j-api` = "org.slf4j" % "slf4j-api" % "1.7.25"
-  val playJson = "com.typesafe.play" %% "play-json" % "2.9.2"
+  val `scopt` = "com.github.scopt" %% "scopt" % "4.1.0" //MIT License
+  val `slf4j-api` = "org.slf4j" % "slf4j-api" % "2.0.17"
+  val playJson = "com.typesafe.play" %% "play-json" % "2.10.6"
 
-  val `scalatest`       = "org.scalatest"          %% "scalatest"       % "3.2.11"  //Apache License 2.0
-  val `scala-async`     = "org.scala-lang.modules" %% "scala-async"     % "1.0.1"  //BSD 3-clause "New" or "Revised" License
+  val `scalatest`       = "org.scalatest"          %% "scalatest"       % "3.2.19"  //Apache License 2.0
+  val `dotty-cps-async` = "com.github.rssh" %% "dotty-cps-async" % "0.9.23"
 //  val `junit`           = "junit"                  %  "junit"           % "4.13.1"  //Eclipse Public License 1.0
 //  val `junit-interface` = "com.novocode"           %  "junit-interface" % "0.13.2"   //BSD 2-clause "Simplified" License
-  val `mockito-scala`   = "org.mockito"            %% "mockito-scala"   % "1.17.12"
+  val `mockito-scala`   = "org.mockito"            %% "mockito-scala"   % "2.0.0"
 }
 
 object CSW {
