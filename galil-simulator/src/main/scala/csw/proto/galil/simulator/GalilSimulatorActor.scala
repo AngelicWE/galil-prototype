@@ -14,7 +14,15 @@ import scala.concurrent.duration._
 object GalilSimulatorActor {
 
   // Commands corresponding to the ones defined in GalilCommands.conf
-  // (XXX TODO: Add missing commands)
+  // New interface commands (embedded program execution)
+  val ExecuteProgram       = "XQ"
+  val HaltExecution        = "HX"
+  val SetBit               = "SB"
+  val ClearBit             = "CB"
+  val AnalogOutput         = "AO"
+  val MessageGet           = "MG"  // Used for reading analog inputs: MG @AN[n]
+  
+  // Legacy commands (kept for reference, but removed from interface)
   val AbsTarget            = "PA"
   val Acceleration         = "AC"
   val AmplifierGain        = "AG"
@@ -103,9 +111,48 @@ object GalilSimulatorActor {
     try {
       val (response, maybeNewBehavior) =
         cmdString.take(2) match {
+          // Core commands
           case `GetDataRecord` =>
             (ByteString(getDataRecord(simCtx).toByteBuffer), None)
           case `ErrorCode` => (formatReply(tcCmd(cmdString)), None)
+          
+          // New interface: Program execution commands
+          case `ExecuteProgram` =>
+            // XQ #LABEL,thread
+            // For now, just acknowledge success
+            println(s"Simulator: ExecuteProgram - $cmdString")
+            (formatReply(None), None)
+          
+          case `HaltExecution` =>
+            // HX thread
+            // For now, just acknowledge success
+            println(s"Simulator: HaltExecution - $cmdString")
+            (formatReply(None), None)
+          
+          // New interface: Digital I/O commands  
+          case `SetBit` =>
+            // SB address
+            println(s"Simulator: SetBit - $cmdString")
+            (formatReply(None), None)
+          
+          case `ClearBit` =>
+            // CB address
+            println(s"Simulator: ClearBit - $cmdString")
+            (formatReply(None), None)
+          
+          // New interface: Analog I/O commands
+          case `AnalogOutput` =>
+            // AO channel,value
+            println(s"Simulator: AnalogOutput - $cmdString")
+            (formatReply(None), None)
+          
+          case `MessageGet` =>
+            // MG @AN[channel] - Read analog input
+            // Return simulated voltage value
+            println(s"Simulator: ReadAnalogInput - $cmdString")
+            (formatReply("2.5"), None)  // Return 2.5V
+          
+          // Legacy motion control commands (kept for backwards compatibility)
           case `BeginMotion` =>
             (formatReply(None), Some(beginMotion(ctx, simCtx, timer, cmdString)))
           case `MotorOn` =>

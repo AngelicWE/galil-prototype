@@ -25,8 +25,13 @@ object GalilCommandMessage {
 
   case class GalilCommand(commandString: String) extends GalilCommandMessage
 
-  case class GalilRequest(commandString: String, runId: Id, maybeObsId: Option[ObsId], cmdMapEntry: CommandMapEntry)
-      extends GalilCommandMessage
+  case class GalilRequest(
+      commandString: String, 
+      runId: Id, 
+      maybeObsId: Option[ObsId], 
+      cmdMapEntry: CommandMapEntry,
+      setup: Setup
+  ) extends GalilCommandMessage
 
 }
 
@@ -44,6 +49,7 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
       GalilIOActor
         .behavior(
           getGalilConfig,
+          config,
           commandResponseManager,
           adapter,
           loggerFactory,
@@ -89,7 +95,7 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
       case setup: Setup =>
         val cmdMapEntry = adapter.getCommandMapEntry(setup)
         val cmdString   = adapter.validateSetup(setup, cmdMapEntry.get)
-        galilIoActor ! GalilRequest(cmdString.get, runId, setup.maybeObsId, cmdMapEntry.get)
+        galilIoActor ! GalilRequest(cmdString.get, runId, setup.maybeObsId, cmdMapEntry.get, setup)
         CommandResponse.Started(runId)
       case x =>
         // Should not happen after validation
@@ -107,7 +113,7 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
           case cmd if cmd == GalilIOActor.publishDataRecord =>
             galilIoActor ! GalilCommand(cmd)
           case cmd =>
-            galilIoActor ! GalilRequest(cmd, runId, setup.maybeObsId, cmdMapEntry.get)
+            galilIoActor ! GalilRequest(cmd, runId, setup.maybeObsId, cmdMapEntry.get, setup)
         }
       case _ => // Only Setups handled
     }

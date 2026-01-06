@@ -18,33 +18,36 @@ object CSWDeviceAdapter {
 
   //  // --- command parameter keys ---
 
-  val axisKey: Key[Char]            = KeyType.CharKey.make("axis")
-  val eDescKey: Key[String]         = KeyType.StringKey.make("eDesc")
-  val mTypeKey: Key[Double]         = KeyType.DoubleKey.make("mType")
+  // Program execution parameters
+  val labelKey: Key[String]         = KeyType.StringKey.make("label")
+  val threadKey: Key[Int]           = KeyType.IntKey.make("thread")
+  val programTextKey: Key[String]   = KeyType.StringKey.make("programText")
+  val filenameKey: Key[String]      = KeyType.StringKey.make("filename")
+  
+  // I/O parameters
+  val addressKey: Key[Int]          = KeyType.IntKey.make("address")
+  val channelKey: Key[Int]          = KeyType.IntKey.make("channel")
+  val valueKey: Key[Double]         = KeyType.DoubleKey.make("value")
+  
+  // Error reporting parameters
   val eCodeKey: Key[Int]            = KeyType.IntKey.make("eCode")
-  val swStatusKey: Key[Int]         = KeyType.IntKey.make("swStatus")
-  val lcParamKey: Key[Int]          = KeyType.IntKey.make("lcParam")
-  val smoothKey: Key[Double]        = KeyType.DoubleKey.make("smooth")
-  val speedKey: Key[Int]            = KeyType.IntKey.make("speed")
-  val countsKey: Key[Int]           = KeyType.IntKey.make("counts")
-  val interpCountsKey: Key[Int]     = KeyType.IntKey.make("interpCounts")
-  val brushlessModulusKey: Key[Int] = KeyType.IntKey.make("brushlessModulus")
-  val voltsKey: Key[Double]         = KeyType.DoubleKey.make("volts")
+  val eDescKey: Key[String]         = KeyType.StringKey.make("eDesc")
+  
+  // Generic command parameter
+  val commandStringKey: Key[String] = KeyType.StringKey.make("commandString")
 
   // Map key name to key
   private val commandParamKeys: List[Key[?]] = List(
-    axisKey,
-    eDescKey,
-    mTypeKey,
+    labelKey,
+    threadKey,
+    programTextKey,
+    filenameKey,
+    addressKey,
+    channelKey,
+    valueKey,
     eCodeKey,
-    swStatusKey,
-    lcParamKey,
-    smoothKey,
-    speedKey,
-    countsKey,
-    interpCountsKey,
-    brushlessModulusKey,
-    voltsKey
+    eDescKey,
+    commandStringKey
   )
 
   private val commandParamKeyMap: Map[String, Key[?]] = commandParamKeys.map(k => k.keyName -> k).toMap
@@ -116,6 +119,9 @@ class CSWDeviceAdapter(config: Config) {
       Completed(runId)
     }
     else {
+      // DEBUG: Print what's in paramDefMap
+      println(s"DEBUG: paramDefMap keys = ${paramDefMap.keys.mkString(", ")}")
+      println(s"DEBUG: responseFormat = ${cmdEntry.responseFormat}")
       // Look up the paramDef entries defined in the response string
       val paramDefs = paramRegex
         .findAllMatchIn(cmdEntry.responseFormat)
@@ -150,9 +156,18 @@ class CSWDeviceAdapter(config: Config) {
 
     paramValues.zip(paramDefs).map { pair =>
       val name     = pair._2.name.trim
-      val key      = commandParamKeyMap(name)
       val typeStr  = pair._2.typeStr.trim
       val valueStr = pair._1.trim
+
+      // FIXED: Create key on-the-fly from paramDef instead of looking up in commandParamKeyMap
+      // This allows response parameters (like "response") to work without being in the hardcoded map
+      val key: Key[?] = typeStr match {
+        case "string" => KeyType.StringKey.make(name)
+        case "int"    => KeyType.IntKey.make(name)
+        case "double" => KeyType.DoubleKey.make(name)
+        case "char"   => KeyType.CharKey.make(name)
+        case other    => throw new RuntimeException(s"Unsupported parameter type: $other")
+      }
 
       typeStr match {
         case "char"   => key.asInstanceOf[Key[Char]].set(valueStr.charAt(0))

@@ -15,6 +15,25 @@ abstract class GalilIo {
   protected def write(sendBuf: Array[Byte]): Unit
 
   /**
+   * Writes raw data to the socket without waiting for a response.
+   * Used for streaming commands like DL (program download) where
+   * responses don't come after each line.
+   * 
+   * @param data string to write (will add \r\n terminator)
+   */
+  def writeRaw(data: String): Unit = {
+    val sendBuf = s"$data\r\n".getBytes()
+    write(sendBuf)
+  }
+
+  /**
+   * Drains input buffer and shows what data is present (non-blocking).
+   * Used for debugging - shows what data the controller sent that we didn't read.
+   * Returns empty string if no data available.
+   */
+  def drainAndShowBuffer(): String
+
+  /**
    * Reads the reply from the socket and returns it as a ByteString
    */
   protected def read(): ByteString
@@ -59,18 +78,35 @@ abstract class GalilIo {
   private def receiveReplies(result: ByteString = ByteString()): ByteString = {
     val data   = read()
     val length = data.length
+    
+    // DEBUG: Show what we received and what terminators we're checking
+    // if (length > 0) {
+    //   val preview = if (length > 50) data.utf8String.take(50) + "..." else data.utf8String
+    //   val endChars = if (length >= 3) data.takeRight(3).utf8String.map(c => s"'$c'(${c.toInt})").mkString(" ") else ""
+    //   println(s"DEBUG GalilIo.receiveReplies: Read $length bytes, end chars: [$endChars], preview: $preview")
+    // }
+    
     if (length == 0) result
     else if (length == 1 && data.utf8String == "?")
       result ++ data
-    else if (data.takeRight(endMarker.length).utf8String == endMarker)
+    else if (data.takeRight(endMarker.length).utf8String == endMarker) {
+      // println(s"DEBUG GalilIo: Found endMarker '\\r\\n:', complete")
       result ++ data.dropRight(endMarker.length)
-    else if (data.takeRight(separator.length).utf8String == separator)
-      result ++ data.dropRight(separator.length)
+    }
+    // REMOVED separator check - it was stopping at line endings instead of response end
+    // else if (data.takeRight(separator.length).utf8String == separator) {
+    //   println(s"DEBUG GalilIo: Found separator '\\r\\n', complete")
+    //   result ++ data.dropRight(separator.length)
+    // }
     else if (data.takeRight(1).utf8String == ":") {
+      // println(s"DEBUG GalilIo: Found colon ':', complete")
       result ++ data.dropRight(1)
     }
-    else
-      result ++ data // Should not happen?
+    else {
+      // Response incomplete - recurse to read more
+      // println(s"DEBUG GalilIo: Response incomplete ($length bytes, total so far: ${result.length + data.length}), recursing...")
+      receiveReplies(result ++ data)
+    }
   }
 }
 
@@ -113,6 +149,12 @@ case class GalilIoUdp(host: String = "127.0.0.1", port: Int = 8888) extends Gali
     ByteString.fromArray(packet.getData, packet.getOffset, packet.getLength)
   }
 
+  // UDP doesn't have the same buffering as TCP - just return empty
+  override def drainAndShowBuffer(): String = {
+    println(s"DEBUG drainAndShowBuffer: UDP implementation - not applicable")
+    ""
+  }
+
   override def close(): Unit = socket.close()
 }
 
@@ -143,6 +185,25 @@ case class GalilIoTcp(host: String = "127.0.0.1", port: Int = 8888) extends Gali
     val buf    = Array.ofDim[Byte](bufSize)
     val length = socket.getInputStream.read(buf)
     ByteString.fromArray(buf, 0, length)
+  }
+
+  // Non-blocking drain - only reads if data is available
+  override def drainAndShowBuffer(): String = {
+    val available = socket.getInputStream.available()
+    if (available > 0) {
+      val buf = Array.ofDim[Byte](Math.min(available, 1000)) // Read up to 1KB
+      val length = socket.getInputStream.read(buf)
+      val buffer = ByteString.fromArray(buf, 0, length)
+      val hex = buffer.take(50).map(b => f"$b%02X").mkString(" ")
+      val preview = if (length > 100) buffer.utf8String.take(100) + "..." else buffer.utf8String
+      println(s"DEBUG drainAndShowBuffer: Found $length bytes:")
+      println(s"  Hex (first 50): $hex")
+      println(s"  ASCII preview: $preview")
+      buffer.utf8String
+    } else {
+      println(s"DEBUG drainAndShowBuffer: Buffer is empty (available=$available)")
+      ""
+    }
   }
 
   override def close(): Unit = socket.close()
