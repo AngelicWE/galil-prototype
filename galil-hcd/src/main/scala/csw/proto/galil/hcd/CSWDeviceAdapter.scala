@@ -119,9 +119,6 @@ class CSWDeviceAdapter(config: Config) {
       Completed(runId)
     }
     else {
-      // DEBUG: Print what's in paramDefMap
-      println(s"DEBUG: paramDefMap keys = ${paramDefMap.keys.mkString(", ")}")
-      println(s"DEBUG: responseFormat = ${cmdEntry.responseFormat}")
       // Look up the paramDef entries defined in the response string
       val paramDefs = paramRegex
         .findAllMatchIn(cmdEntry.responseFormat)

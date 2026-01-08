@@ -244,10 +244,10 @@ case class GalilHcdClient(source: Prefix, locationService: LocationService)(impl
    * @param filename Output file name (e.g., "current.dmc" or "backup_20241217.dmc")
    * @param obsId    Optional observation ID
    */
-  def downloadPrograms(filename: String, obsId: Option[ObsId] = None): Future[CommandResponse] = {
+  def downloadProgram(filename: String, obsId: Option[ObsId] = None): Future[CommandResponse] = {
     getGalilHcd.flatMap {
       case Some(hcd) =>
-        val setup = Setup(source, CommandName("downloadPrograms"), obsId)
+        val setup = Setup(source, CommandName("downloadProgram"), obsId)
           .add(filenameKey.set(filename))
 
         hcd.submitAndWait(setup)

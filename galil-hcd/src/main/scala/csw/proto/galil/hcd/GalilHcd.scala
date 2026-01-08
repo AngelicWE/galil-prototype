@@ -44,9 +44,9 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
   implicit val ec: ExecutionContextExecutor = ctx.executionContext
   private val config                        = ConfigFactory.load("GalilCommands.conf")
   private val adapter                       = new CSWDeviceAdapter(config)
-  private val galilIoActor: ActorRef[GalilCommandMessage] =
+  private val controllerInterfaceActor: ActorRef[GalilCommandMessage] =
     ctx.spawn(
-      GalilIOActor
+      ControllerInterfaceActor
         .behavior(
           getGalilConfig,
           config,
@@ -56,7 +56,7 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
           componentInfo.prefix,
           cswCtx.currentStatePublisher
         ),
-      "GalilIOActor"
+      "ControllerInterfaceActor"
     )
 
   override def initialize(): Unit = log.debug("Initialize called")
@@ -95,7 +95,7 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
       case setup: Setup =>
         val cmdMapEntry = adapter.getCommandMapEntry(setup)
         val cmdString   = adapter.validateSetup(setup, cmdMapEntry.get)
-        galilIoActor ! GalilRequest(cmdString.get, runId, setup.maybeObsId, cmdMapEntry.get, setup)
+        controllerInterfaceActor ! GalilRequest(cmdString.get, runId, setup.maybeObsId, cmdMapEntry.get, setup)
         CommandResponse.Started(runId)
       case x =>
         // Should not happen after validation
@@ -110,10 +110,10 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
         val cmdMapEntry = adapter.getCommandMapEntry(setup)
         val cmdString   = adapter.validateSetup(setup, cmdMapEntry.get)
         cmdString.get match {
-          case cmd if cmd == GalilIOActor.publishDataRecord =>
-            galilIoActor ! GalilCommand(cmd)
+          case cmd if cmd == ControllerInterfaceActor.publishDataRecord =>
+            controllerInterfaceActor ! GalilCommand(cmd)
           case cmd =>
-            galilIoActor ! GalilRequest(cmd, runId, setup.maybeObsId, cmdMapEntry.get, setup)
+            controllerInterfaceActor ! GalilRequest(cmd, runId, setup.maybeObsId, cmdMapEntry.get, setup)
         }
       case _ => // Only Setups handled
     }

@@ -16,7 +16,7 @@ import scala.concurrent.{Await, ExecutionContextExecutor}
  * Prerequisites:
  * 1. CSW services running (csw-services start)
  * 2. Galil HCD running with RegisterOnly
- * 3. protoHCD_lab.dmc file in galil-hcd/src/main/resources/programs/
+ * 3. sampleHCD_2steppers.dmc file in galil-hcd/src/main/resources/programs/
  */
 object TestProgramUploadDownload {
   implicit val typedSystem: ActorSystem[SpawnProtocol.Command] = ActorSystem(SpawnProtocol(), "TestProgramUploadDownload")
@@ -41,8 +41,8 @@ object TestProgramUploadDownload {
       val downloadFilename = "downloaded_current.dmc"
       println(s"Downloading programs from controller to: $downloadFilename")
       
-      val resp1 = Await.result(galilHcdClient.downloadPrograms(downloadFilename, maybeObsId), 60.seconds)
-      println(s"1. downloadPrograms: $resp1")
+      val resp1 = Await.result(galilHcdClient.downloadProgram(downloadFilename, maybeObsId), 60.seconds)
+      println(s"1. downloadProgram: $resp1")
       resp1 match {
         case csw.params.commands.CommandResponse.Completed(_, result) =>
           result.get(csw.params.core.generics.KeyType.StringKey.make("filename")) match {
@@ -56,8 +56,8 @@ object TestProgramUploadDownload {
       }
       
       // Give controller time to complete and flush buffers
-      println("\n   Waiting 0.5 seconds for controller to settle...")
-      Thread.sleep(500)
+      println("\n   Waiting 3 seconds for controller to settle...")
+      Thread.sleep(3000)
       
       // Test 2: Upload a known-good program
       println("\n--- Test 2: Upload Program ---")
@@ -78,12 +78,12 @@ object TestProgramUploadDownload {
       val verifyFilename = "downloaded_after_upload.dmc"
       println(s"Downloading programs again to verify: $verifyFilename")
       
-      // Give controller time to settle after upload
-      println("   Waiting 0.5 seconds for controller to complete upload...")
-      Thread.sleep(500)
+      // Give controller extra time to settle after upload
+      println("   Waiting 5 seconds for controller to complete upload...")
+      Thread.sleep(5000)
       
-      val resp3 = Await.result(galilHcdClient.downloadPrograms(verifyFilename, maybeObsId), 60.seconds)
-      println(s"3. downloadPrograms (verify): $resp3")
+      val resp3 = Await.result(galilHcdClient.downloadProgram(verifyFilename, maybeObsId), 60.seconds)
+      println(s"3. downloadProgram (verify): $resp3")
       resp3 match {
         case csw.params.commands.CommandResponse.Completed(_, result) =>
           result.get(csw.params.core.generics.KeyType.StringKey.make("filename")) match {

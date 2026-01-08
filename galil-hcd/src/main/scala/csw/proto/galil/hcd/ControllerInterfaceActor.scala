@@ -24,7 +24,7 @@ import scala.util.{Failure, Success}
 /**
  * Worker actor that handles the Galil I/O
  */
-private[hcd] object GalilIOActor {
+private[hcd] object ControllerInterfaceActor {
   // Command to publish the data record as current state
   val publishDataRecord = "publishDataRecord"
 
@@ -71,11 +71,11 @@ private[hcd] object GalilIOActor {
         def resumeQRPolling(): Unit = {
           log.info("Resuming QR polling")
           qrPollingEnabled = true
-          timers.startTimerWithFixedDelay(QRPollingTimer, GalilCommand(GalilIOActor.publishDataRecord), 1.second)
+          timers.startTimerWithFixedDelay(QRPollingTimer, GalilCommand(ControllerInterfaceActor.publishDataRecord), 1.second)
         }
 
         def galilSend(cmd: String): String = {
-          log.info(s"Sending '$cmd' to Galil")
+          log.debug(s"Sending '$cmd' to Galil")
           val responses = galilIo.send(cmd)
           if (responses.lengthCompare(1) != 0)
             throw new RuntimeException(s"Received ${responses.size} responses to Galil $cmd")
@@ -97,7 +97,7 @@ private[hcd] object GalilIOActor {
         verifyGalil()
 
         // Start QR polling timer (repeats every 1 second)
-        timers.startTimerWithFixedDelay(QRPollingTimer, GalilCommand(GalilIOActor.publishDataRecord), 1.second)
+        timers.startTimerWithFixedDelay(QRPollingTimer, GalilCommand(ControllerInterfaceActor.publishDataRecord), 1.second)
 
         // Publish the contents of the data record as a CurrentState object
         def publishDataRecord(): Unit = {
@@ -189,13 +189,13 @@ private[hcd] object GalilIOActor {
                     }
                     
                     // DIAGNOSTIC: Check what data is left in the buffer after DL
-                    log.info("DIAGNOSTIC: Checking for residual data after DL")
+                    log.debug("DIAGNOSTIC: Checking for residual data after DL")
                     val residual = galilIo.drainAndShowBuffer()
                     if (residual.nonEmpty) {
                       log.warn(s"DIAGNOSTIC: Found ${residual.length} bytes of residual data!")
                       log.warn(s"DIAGNOSTIC: First 200 chars: ${residual.take(200)}")
                     } else {
-                      log.info("DIAGNOSTIC: Buffer is clean after DL")
+                      log.debug("DIAGNOSTIC: Buffer is clean after DL")
                     }
                   }
                   
@@ -223,7 +223,7 @@ private[hcd] object GalilIOActor {
           }
         }
 
-        def handleDownloadPrograms(filename: String, runId: Id, maybeObsId: Option[ObsId], cmdMapEntry: CommandMapEntry): Unit = {
+        def handledownloadProgram(filename: String, runId: Id, maybeObsId: Option[ObsId], cmdMapEntry: CommandMapEntry): Unit = {
           log.info(s"Downloading programs to file: $filename")
           
           // Pause QR polling during file operation to prevent buffer corruption
@@ -236,38 +236,22 @@ private[hcd] object GalilIOActor {
             // Send UL command - returns program without line numbers
             // Synchronized to prevent interference from background QR polling
             log.info("Sending UL command to controller")
-            val responses = galilIo.synchronized {
-              // DIAGNOSTIC: Check buffer state before UL
-              log.info("DIAGNOSTIC: Checking buffer state before UL")
-              val preUL = galilIo.drainAndShowBuffer()
-              if (preUL.nonEmpty) {
-                // Single ':' is normal controller prompt after previous DL - not an error
-                if (preUL.length == 1 && preUL == ":") {
-                  log.debug("DIAGNOSTIC: Found controller prompt (':') - this is normal")
-                } else {
-                  // Multiple bytes or non-colon data indicates a real problem
-                  log.warn(s"DIAGNOSTIC: Found ${preUL.length} bytes BEFORE UL command!")
-                  log.warn(s"DIAGNOSTIC: This indicates QR polling was not properly paused!")
-                }
+            // Download program using proper protocol
+            log.info("Downloading program from controller")
+            val cleanedProgram = galilIo.synchronized {
+              // Safety net: Check for residual data before download
+              val preCheck = galilIo.drainAndShowBuffer(timeoutMs = 50)
+              if (preCheck.nonEmpty) {
+                log.error(s"PROTOCOL BUG: Found ${preCheck.length} bytes before download!")
+                log.error(s"Data: ${preCheck.take(100)}")
+                log.error("This indicates QR polling was not properly paused")
               }
               
-              galilIo.send("UL")
+              galilIo.downloadProgram()
             }
-            log.info(s"Received ${responses.size} response chunks from UL")
             
-            // Collect all response chunks - UL returns raw program without line numbers
-            val allText = responses.map(_._2.utf8String).mkString
-            log.info(s"Total response: ${allText.length} characters")
+            log.info(s"Downloaded program: ${cleanedProgram.length} characters")
             
-            // UL terminates with \ - remove it if present
-            val cleanedProgram = allText
-              .stripSuffix("\\")
-              .stripSuffix("\u001A")  // Control-Z (alternative terminator)
-              .trim
-            
-            log.info(s"Cleaned program: ${cleanedProgram.length} characters")
-            
-            // Write to file - no line number parsing needed!
             ProgramFileManager.writeProgramFile(filename, cleanedProgram, config) match {
               case Success(filePath) =>
                 log.info(s"Successfully downloaded programs to $filePath")
@@ -303,7 +287,8 @@ private[hcd] object GalilIOActor {
         Behaviors.receiveMessage[GalilCommandMessage] {
           case GalilCommand(commandString) =>
             log.debug(s"doing command: $commandString")
-            if (commandString == GalilIOActor.publishDataRecord) {
+            
+            if (commandString == ControllerInterfaceActor.publishDataRecord) {
               publishDataRecord()
               // Timer automatically repeats - no need to reschedule
             }
@@ -328,14 +313,14 @@ private[hcd] object GalilIOActor {
                 }
                 Behaviors.same
                 
-              case "downloadPrograms" =>
+              case "downloadProgram" =>
                 // Extract filename from setup
                 setup.get(CSWDeviceAdapter.filenameKey) match {
                   case Some(param) =>
                     val filename = param.head
-                    handleDownloadPrograms(filename, runId, maybeObsId, commandKey)
+                    handledownloadProgram(filename, runId, maybeObsId, commandKey)
                   case None =>
-                    log.error("downloadPrograms command missing filename parameter")
+                    log.error("downloadProgram command missing filename parameter")
                     commandResponseManager.updateCommand(
                       Error(runId, "Missing filename parameter")
                     )

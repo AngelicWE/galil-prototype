@@ -27,11 +27,17 @@ abstract class GalilIo {
   }
 
   /**
-   * Drains input buffer and shows what data is present (non-blocking).
-   * Used for debugging - shows what data the controller sent that we didn't read.
-   * Returns empty string if no data available.
+   * Drains input buffer and shows what data is present.
+   * Waits up to timeoutMs for data to arrive before returning.
+   * 
+   * This is a safety net for debugging and error recovery.
+   * In normal operation with proper protocol implementation, this should
+   * return empty strings. If it finds data, that indicates a protocol bug.
+   * 
+   * @param timeoutMs maximum time to wait for data (default 200ms)
+   * @return string of data read from buffer
    */
-  def drainAndShowBuffer(): String
+  def drainAndShowBuffer(timeoutMs: Int = 200): String
 
   /**
    * Reads the reply from the socket and returns it as a ByteString
@@ -69,6 +75,69 @@ abstract class GalilIo {
     write(sendBuf)
     val result = for (c <- cmds) yield (c, receiveReplies())
     result.toList
+  }
+
+  /**
+   * Sends a command and waits only for the acknowledgment prompt (:).
+   * Used for commands that don't return data, just confirmation.
+   * 
+   * @param cmd command to send
+   * @throws RuntimeException if response is not ":" or command was rejected ("?")
+   */
+  def sendAndWaitForPrompt(cmd: String): Unit = {
+    val responses = send(cmd)
+    if (responses.size != 1) {
+      throw new RuntimeException(s"Expected 1 response to '$cmd', got ${responses.size}")
+    }
+    val (_, response) = responses.head
+    val responseStr = response.utf8String.trim
+    // Empty response means we got ":" which was stripped by receiveReplies
+    // "?" means command was rejected
+    if (responseStr == "?") {
+      throw new RuntimeException(s"Command '$cmd' rejected by controller")
+    }
+    // Otherwise, empty or ":" is success
+  }
+
+  /**
+   * Downloads program from controller using UL command.
+   * Properly implements the UL protocol.
+   * 
+   * @return program text from controller (without backslash terminator)
+   */
+  def downloadProgram(): String = {
+    val responses = send("UL")
+    if (responses.size != 1) {
+      throw new RuntimeException(s"Expected 1 response to UL, got ${responses.size}")
+    }
+    
+    val program = responses.head._2.utf8String
+    
+    // UL terminates with backslash - remove it if present
+    program
+      .stripSuffix("\\")
+      .stripSuffix("\u001A")  // Control-Z (alternative terminator)
+      .trim
+  }
+
+  /**
+   * Uploads program to controller using DL command.
+   * Properly implements the DL protocol.
+   * 
+   * CRITICAL: DL does not respond until the program terminator (\) is sent.
+   * The controller waits for program data after receiving DL.
+   * 
+   * @param program the program text to upload
+   */
+  def uploadProgram(program: String): Unit = {
+    // Step 1: Enter DL mode - controller does NOT respond yet, waits for data
+    writeRaw("DL")
+    
+    // Step 2: Stream program data (no response expected per line)
+    writeRaw(program)
+    
+    // Step 3: Send terminator - controller responds with ":" only now
+    sendAndWaitForPrompt("\\")
   }
 
   // Receives a reply (up to endMarker) for the given command and returns the result
@@ -150,8 +219,7 @@ case class GalilIoUdp(host: String = "127.0.0.1", port: Int = 8888) extends Gali
   }
 
   // UDP doesn't have the same buffering as TCP - just return empty
-  override def drainAndShowBuffer(): String = {
-    println(s"DEBUG drainAndShowBuffer: UDP implementation - not applicable")
+  override def drainAndShowBuffer(timeoutMs: Int = 200): String = {
     ""
   }
 
@@ -178,6 +246,7 @@ case class GalilIoTcp(host: String = "127.0.0.1", port: Int = 8888) extends Gali
 
   override def write(sendBuf: Array[Byte]): Unit = {
     socket.getOutputStream.write(sendBuf)
+    socket.getOutputStream.flush()  // Force immediate send to controller
   }
 
   // Receives a single reply for the given command and returns the result
@@ -187,23 +256,54 @@ case class GalilIoTcp(host: String = "127.0.0.1", port: Int = 8888) extends Gali
     ByteString.fromArray(buf, 0, length)
   }
 
-  // Non-blocking drain - only reads if data is available
-  override def drainAndShowBuffer(): String = {
-    val available = socket.getInputStream.available()
-    if (available > 0) {
-      val buf = Array.ofDim[Byte](Math.min(available, 1000)) // Read up to 1KB
-      val length = socket.getInputStream.read(buf)
-      val buffer = ByteString.fromArray(buf, 0, length)
-      val hex = buffer.take(50).map(b => f"$b%02X").mkString(" ")
-      val preview = if (length > 100) buffer.utf8String.take(100) + "..." else buffer.utf8String
-      println(s"DEBUG drainAndShowBuffer: Found $length bytes:")
-      println(s"  Hex (first 50): $hex")
-      println(s"  ASCII preview: $preview")
-      buffer.utf8String
-    } else {
-      println(s"DEBUG drainAndShowBuffer: Buffer is empty (available=$available)")
-      ""
+  /**
+   * Drains input buffer with timeout to ensure data is actually read.
+   * 
+   * This waits with timeout to ensure we catch all data.
+   * In normal operation with proper protocol implementation, this should
+   * return empty strings. If it finds data, that indicates a protocol bug.
+   * 
+   * @param timeoutMs maximum time to wait for data
+   * @return all data read from buffer
+   */
+  override def drainAndShowBuffer(timeoutMs: Int = 200): String = {
+    val result = new StringBuilder
+    val startTime = System.currentTimeMillis()
+    val oldTimeout = socket.getSoTimeout
+    
+    try {
+      // Set a short timeout for non-blocking reads
+      socket.setSoTimeout(timeoutMs)
+      
+      // Keep reading until timeout or no more data
+      var continue = true
+      while (continue && (System.currentTimeMillis() - startTime) < timeoutMs) {
+        try {
+          val available = socket.getInputStream.available()
+          if (available > 0) {
+            val buf = Array.ofDim[Byte](Math.min(available, 1000))
+            val length = socket.getInputStream.read(buf)
+            if (length > 0) {
+              result.append(ByteString.fromArray(buf, 0, length).utf8String)
+            } else {
+              continue = false
+            }
+          } else {
+            // No data available - wait a bit and check again
+            Thread.sleep(10)
+          }
+        } catch {
+          case _: java.net.SocketTimeoutException =>
+            // Timeout - no more data coming
+            continue = false
+        }
+      }
+    } finally {
+      // Restore original timeout
+      socket.setSoTimeout(oldTimeout)
     }
+    
+    result.toString
   }
 
   override def close(): Unit = socket.close()
