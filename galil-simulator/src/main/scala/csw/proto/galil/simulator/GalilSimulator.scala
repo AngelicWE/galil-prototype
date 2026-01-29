@@ -50,8 +50,16 @@ case class GalilSimulator(host: String = "127.0.0.1", port: Int = 8888)(implicit
     Flow[ByteString]
       .via(Framing.delimiter(ByteString("\r\n"), maximumFrameLength = 256, allowTruncation = true))
       // handle multiple commands on a line separated by ";"
-      .mapConcat(_.utf8String.split(";").map(ByteString(_)).toList)
-      .mapAsync(1)(processCommand(_, conn))
+      .mapConcat(_.utf8String.split(";").map(_.trim).filter(_.nonEmpty).map(ByteString(_)).toList)
+      .mapAsync(1) { cmd =>
+        processCommand(cmd, conn).map { response =>
+          // Add small delay to simulate real Galil processing time
+          // This ensures text responses are sent in separate TCP packets
+          // Note: QR (binary) responses may need different handling
+          Thread.sleep(10)
+          response
+        }
+      }
       .watchTermination() { (_, f) =>
         closeConnection(f, conn)
       }

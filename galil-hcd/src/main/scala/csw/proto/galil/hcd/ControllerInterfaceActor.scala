@@ -2,7 +2,7 @@ package csw.proto.galil.hcd
 
 import java.io.IOException
 
-import org.apache.pekko.actor.typed.Behavior
+import org.apache.pekko.actor.typed.{ActorRef, Behavior}
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 import com.typesafe.config.Config
@@ -23,10 +23,10 @@ import scala.util.{Failure, Success}
 
 /**
  * Worker actor that handles the Galil I/O
+ * 
+ * Note: GetQR and QRResult are defined in GalilHcd.scala as part of GalilCommandMessage
  */
 private[hcd] object ControllerInterfaceActor {
-  // Command to publish the data record as current state
-  val publishDataRecord = "publishDataRecord"
 
   def behavior(
       galilConfig: GalilConfig,
@@ -35,16 +35,14 @@ private[hcd] object ControllerInterfaceActor {
       adapter: CSWDeviceAdapter,
       loggerFactory: LoggerFactory,
       galilPrefix: Prefix,
-      currentStatePublisher: CurrentStatePublisher
+      currentStatePublisher: CurrentStatePublisher,
+      statusMonitor: ActorRef[StatusMonitor.Command]
   ): Behavior[GalilCommandMessage] =
     Behaviors.withTimers { timers =>
       Behaviors.setup { ctx =>
         val log = loggerFactory.getLogger
-        
-        // Timer key for QR polling
-        val QRPollingTimer = "qr-polling-timer"
 
-        // Connect to Galikl device and throw error if that doesn't work
+        // Connect to Galil device and throw error if that doesn't work
         def connectToGalil(): GalilIo = {
           try {
             GalilIoTcp(galilConfig.host, galilConfig.port)
@@ -56,23 +54,6 @@ private[hcd] object ControllerInterfaceActor {
           }
         }
         val galilIo = connectToGalil()
-        
-        // Flag to prevent queued QR messages from executing during pause
-        var qrPollingEnabled = true
-
-        // Pause QR polling (before file operations)
-        def pauseQRPolling(): Unit = {
-          log.info("Pausing QR polling for file operation")
-          qrPollingEnabled = false
-          timers.cancel(QRPollingTimer)
-        }
-        
-        // Resume QR polling (after file operations)
-        def resumeQRPolling(): Unit = {
-          log.info("Resuming QR polling")
-          qrPollingEnabled = true
-          timers.startTimerWithFixedDelay(QRPollingTimer, GalilCommand(ControllerInterfaceActor.publishDataRecord), 1.second)
-        }
 
         def galilSend(cmd: String): String = {
           log.debug(s"Sending '$cmd' to Galil")
@@ -84,7 +65,7 @@ private[hcd] object ControllerInterfaceActor {
           resp
         }
 
-        // Check that there is a Galil device on the other end of the socket (Is there good Galil command to use here?)
+        // Check that there is a Galil device on the other end of the socket
         def verifyGalil(): Unit = {
           val s = galilSend("")
           if (s.nonEmpty)
@@ -95,33 +76,6 @@ private[hcd] object ControllerInterfaceActor {
         }
 
         verifyGalil()
-
-        // Start QR polling timer (repeats every 1 second)
-        timers.startTimerWithFixedDelay(QRPollingTimer, GalilCommand(ControllerInterfaceActor.publishDataRecord), 1.second)
-
-        // Publish the contents of the data record as a CurrentState object
-        def publishDataRecord(): Unit = {
-          // Guard: Skip if QR polling is paused (handles queued messages)
-          if (!qrPollingEnabled) {
-            log.debug("Skipping QR - polling is paused")
-            return
-          }
-          
-          try {
-            // Synchronized access to prevent interference with LS/DL commands
-            val response = galilIo.synchronized {
-              galilIo.send("QR")
-            }
-            val bs       = response.head._2
-            val dr       = DataRecord(bs)
-            val cs       = CurrentState(galilPrefix, StateName("DataRecord"), dr.toParamSet)
-            currentStatePublisher.publish(cs)
-          } catch {
-            case ex: Exception =>
-              log.warn(s"Failed to publish data record: ${ex.getMessage}")
-              // Don't crash - just skip this update and try again next time
-          }
-        }
 
         def handleDataRecordResponse(dr: DataRecord, runId: Id, maybeObsId: Option[ObsId], cmdMapEntry: CommandMapEntry): Unit = {
           log.debug(s"handleDataRecordResponse $dr")
@@ -142,8 +96,8 @@ private[hcd] object ControllerInterfaceActor {
         def handleUploadProgram(filename: String, runId: Id, maybeObsId: Option[ObsId], cmdMapEntry: CommandMapEntry): Unit = {
           log.info(s"Uploading program from file: $filename")
           
-          // Pause QR polling during file operation to prevent buffer corruption
-          pauseQRPolling()
+          // Pause StatusMonitor QR polling during file operation to prevent buffer corruption
+          statusMonitor ! StatusMonitor.PauseQRPolling
           
           try {
             // Small delay to let any in-flight QR command complete
@@ -156,19 +110,16 @@ private[hcd] object ControllerInterfaceActor {
                 log.info(s"Prepared program: ${cleanedProgram.length} characters")
                 
                 try {
-                  // Program is preprocessed by prepareProgramForUpload:
-                  // - REM comments and blank lines are stripped
-                  // - Inline ' comments are preserved (controller accepts these)
                   log.info(s"Program size: ${cleanedProgram.length} characters")
                   
-                  // Entire upload sequence must be synchronized to prevent interference from background QR polling
+                  // Entire upload sequence must be synchronized
                   galilIo.synchronized {
                     // Step 0: Halt any running programs
                     log.info("Halting programs (HX)")
                     val hxResponses = galilIo.send("HX")
                     log.info(s"HX got: ${hxResponses.map(_._2.utf8String).mkString}")
                     
-                    // Step 1: Enter DL mode (may not respond until terminator sent)
+                    // Step 1: Enter DL mode
                     log.info("Entering DL mode (using writeRaw)")
                     galilIo.writeRaw("DL")
                     
@@ -176,19 +127,17 @@ private[hcd] object ControllerInterfaceActor {
                     log.info(s"Streaming ${cleanedProgram.length} characters of program data")
                     galilIo.writeRaw(cleanedProgram)
                     
-                    // Step 3: Send terminator and NOW wait for response
+                    // Step 3: Send terminator
                     log.info("Sending terminator")
                     val termResponses = galilIo.send("\\")
                     val termResponse = termResponses.map(_._2.utf8String).mkString.trim
                     log.info(s"Terminator response: '$termResponse'")
                     
-                    // Empty response means we got ":" which was stripped by receiveReplies
-                    // Non-empty response containing ":" also means success
                     if (termResponse.nonEmpty && !termResponse.contains(":")) {
                       throw new RuntimeException(s"Upload terminator failed: $termResponse")
                     }
                     
-                    // DIAGNOSTIC: Check what data is left in the buffer after DL
+                    // DIAGNOSTIC: Check for residual data
                     log.debug("DIAGNOSTIC: Checking for residual data after DL")
                     val residual = galilIo.drainAndShowBuffer()
                     if (residual.nonEmpty) {
@@ -200,7 +149,6 @@ private[hcd] object ControllerInterfaceActor {
                   }
                   
                   log.info(s"Successfully uploaded program from $filename")
-                  log.info("Program uploaded to controller memory")
                   commandResponseManager.updateCommand(Completed(runId, new Result()))
                 } catch {
                   case ex: Exception =>
@@ -217,40 +165,47 @@ private[hcd] object ControllerInterfaceActor {
                 )
             }
           } finally {
-            // Always resume QR polling, even if upload failed
-            Thread.sleep(100)  // Small delay before resuming QR
-            resumeQRPolling()
+            // Always resume StatusMonitor QR polling
+            Thread.sleep(100)
+            statusMonitor ! StatusMonitor.ResumeQRPolling
           }
         }
 
         def handledownloadProgram(filename: String, runId: Id, maybeObsId: Option[ObsId], cmdMapEntry: CommandMapEntry): Unit = {
           log.info(s"Downloading programs to file: $filename")
           
-          // Pause QR polling during file operation to prevent buffer corruption
-          pauseQRPolling()
+          // Pause StatusMonitor QR polling during file operation
+          statusMonitor ! StatusMonitor.PauseQRPolling
           
           try {
-            // Small delay to let any in-flight QR command complete
+            // Small delay to let any in-flight QR complete
             Thread.sleep(100)
             
-            // Send UL command - returns program without line numbers
-            // Synchronized to prevent interference from background QR polling
             log.info("Sending UL command to controller")
-            // Download program using proper protocol
-            log.info("Downloading program from controller")
-            val cleanedProgram = galilIo.synchronized {
-              // Safety net: Check for residual data before download
-              val preCheck = galilIo.drainAndShowBuffer(timeoutMs = 50)
-              if (preCheck.nonEmpty) {
-                log.error(s"PROTOCOL BUG: Found ${preCheck.length} bytes before download!")
-                log.error(s"Data: ${preCheck.take(100)}")
-                log.error("This indicates QR polling was not properly paused")
+            val responses = galilIo.synchronized {
+              log.debug("DIAGNOSTIC: Checking buffer state before UL")
+              val preUL = galilIo.drainAndShowBuffer()
+              if (preUL.nonEmpty) {
+                if (preUL.length == 1 && preUL == ":") {
+                  log.debug("DIAGNOSTIC: Found controller prompt (':') - this is normal")
+                } else {
+                  log.warn(s"DIAGNOSTIC: Found ${preUL.length} bytes BEFORE UL command!")
+                }
               }
               
-              galilIo.downloadProgram()
+              galilIo.send("UL")
             }
+            log.info(s"Received ${responses.size} response chunks from UL")
             
-            log.info(s"Downloaded program: ${cleanedProgram.length} characters")
+            val allText = responses.map(_._2.utf8String).mkString
+            log.info(s"Total response: ${allText.length} characters")
+            
+            val cleanedProgram = allText
+              .stripSuffix("\\")
+              .stripSuffix("\u001A")
+              .trim
+            
+            log.info(s"Cleaned program: ${cleanedProgram.length} characters")
             
             ProgramFileManager.writeProgramFile(filename, cleanedProgram, config) match {
               case Success(filePath) =>
@@ -272,9 +227,9 @@ private[hcd] object ControllerInterfaceActor {
                 Error(runId, s"Download failed: ${ex.getMessage}")
               )
           } finally {
-            // Always resume QR polling, even if download failed
-            Thread.sleep(100)  // Small delay before resuming QR
-            resumeQRPolling()
+            // Always resume StatusMonitor QR polling
+            Thread.sleep(100)
+            statusMonitor ! StatusMonitor.ResumeQRPolling
           }
         }
 
@@ -285,12 +240,20 @@ private[hcd] object ControllerInterfaceActor {
         }
 
         Behaviors.receiveMessage[GalilCommandMessage] {
-          case GalilCommand(commandString) =>
-            log.debug(s"doing command: $commandString")
-            
-            if (commandString == ControllerInterfaceActor.publishDataRecord) {
-              publishDataRecord()
-              // Timer automatically repeats - no need to reschedule
+          // GetQR handler for StatusMonitor integration
+          case GalilCommandMessage.GetQR(replyTo) =>
+            try {
+              // Synchronized access to prevent interference with file operations
+              val response = galilIo.synchronized {
+                galilIo.send("QR")
+              }
+              val bs = response.head._2
+              val dr = DataRecord(bs)
+              replyTo ! GalilCommandMessage.QRResult(dr)
+            } catch {
+              case ex: Exception =>
+                log.error(s"QR command failed: ${ex.getMessage}")
+                // Don't send reply on error - StatusMonitor will timeout and retry
             }
             Behaviors.same
 
@@ -300,7 +263,6 @@ private[hcd] object ControllerInterfaceActor {
             // Check for special commands that need file handling
             commandKey.name match {
               case "uploadProgram" =>
-                // Extract filename from setup
                 setup.get(CSWDeviceAdapter.filenameKey) match {
                   case Some(param) =>
                     val filename = param.head
@@ -314,7 +276,6 @@ private[hcd] object ControllerInterfaceActor {
                 Behaviors.same
                 
               case "downloadProgram" =>
-                // Extract filename from setup
                 setup.get(CSWDeviceAdapter.filenameKey) match {
                   case Some(param) =>
                     val filename = param.head
@@ -328,28 +289,28 @@ private[hcd] object ControllerInterfaceActor {
                 Behaviors.same
                 
               case "getDataRecord" | "getDataRecordRaw" if commandString.startsWith("QR") =>
-                // Special handling for QR commands
                 val response = galilIo.send(commandString)
                 val bs       = response.head._2
                 log.debug(s"Data Record size: ${bs.size})")
                 if (commandKey.name.equals("getDataRecord")) {
-                  // parse the data record
                   val dr = DataRecord(bs)
                   log.debug(s"Data Record: $dr")
                   handleDataRecordResponse(dr, runId, maybeObsId, commandKey)
                 }
                 else {
-                  // return a paramset with the raw data record bytes
                   handleDataRecordRawResponse(bs, runId, maybeObsId, commandKey)
                 }
                 Behaviors.same
                 
               case _ =>
-                // Normal command - send to Galil
                 val response = galilSend(commandString)
                 handleGalilResponse(response, runId, maybeObsId, commandKey)
                 Behaviors.same
             }
+            
+          case _ =>
+            // Handle other GalilCommandMessage types if needed
+            Behaviors.same
         }
       }
     }

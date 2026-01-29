@@ -7,6 +7,7 @@ object Dependencies {
     CSW.`csw-framework`,
     CSW.`csw-testkit` % Test,
     Libs.`scalatest` % Test,
+    Libs.`pekko-actor-testkit-typed` % Test 
 //    Libs.`junit` % Test,
 //    Libs.`junit-interface` % Test
   )

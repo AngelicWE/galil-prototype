@@ -14,8 +14,10 @@ import csw.params.core.models.{Id, ObsId}
 import csw.prefix.models.Subsystem.CSW
 import csw.proto.galil.hcd.CSWDeviceAdapter.CommandMapEntry
 import csw.proto.galil.hcd.GalilCommandMessage.{GalilCommand, GalilRequest}
+import csw.proto.galil.io.DataRecord
 import csw.time.core.models.UTCTime
 
+import scala.compiletime.uninitialized
 import scala.concurrent.ExecutionContextExecutor
 
 // Add messages here...
@@ -33,6 +35,10 @@ object GalilCommandMessage {
       setup: Setup
   ) extends GalilCommandMessage
 
+  // StatusMonitor protocol
+  case class GetQR(replyTo: ActorRef[QRResult]) extends GalilCommandMessage
+  case class QRResult(dataRecord: DataRecord) extends GalilCommandMessage
+
 }
 
 class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswContext)
@@ -44,6 +50,15 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
   implicit val ec: ExecutionContextExecutor = ctx.executionContext
   private val config                        = ConfigFactory.load("GalilCommands.conf")
   private val adapter                       = new CSWDeviceAdapter(config)
+  
+  // Create InternalStateActor first
+  private val internalStateActor: ActorRef[InternalStateActor.Command] =
+    ctx.spawn(InternalStateActor(), "InternalStateActor")
+  
+  // Create StatusMonitor (will be initialized with controllerInterface later)
+  // Use Scala 3 uninitialized instead of deprecated _
+  private var statusMonitor: ActorRef[StatusMonitor.Command] = uninitialized
+  
   private val controllerInterfaceActor: ActorRef[GalilCommandMessage] =
     ctx.spawn(
       ControllerInterfaceActor
@@ -54,14 +69,31 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
           adapter,
           loggerFactory,
           componentInfo.prefix,
-          cswCtx.currentStatePublisher
+          cswCtx.currentStatePublisher,
+          ctx.system.ignoreRef[StatusMonitor.Command]  // Temporary placeholder
         ),
       "ControllerInterfaceActor"
     )
+  
+  // Now create StatusMonitor with real controllerInterfaceActor ref
+  statusMonitor = ctx.spawn(
+    StatusMonitor(
+      controllerInterfaceActor,
+      internalStateActor,
+      pollingRateHz = 10.0  // 10Hz polling
+    ),
+    "StatusMonitor"
+  )
 
-  override def initialize(): Unit = log.debug("Initialize called")
+  override def initialize(): Unit = {
+    log.info("GalilHcd initialized with StatusMonitor (10Hz QR polling)")
+    log.debug("Initialize called")
+  }
 
-  override def onShutdown(): Unit = log.debug("onShutdown called")
+  override def onShutdown(): Unit = {
+    log.debug("onShutdown called")
+    // StatusMonitor will be stopped automatically when context stops
+  }
 
   override def onGoOffline(): Unit = log.debug("onGoOffline called")
 
@@ -109,12 +141,8 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
       case setup: Setup =>
         val cmdMapEntry = adapter.getCommandMapEntry(setup)
         val cmdString   = adapter.validateSetup(setup, cmdMapEntry.get)
-        cmdString.get match {
-          case cmd if cmd == ControllerInterfaceActor.publishDataRecord =>
-            controllerInterfaceActor ! GalilCommand(cmd)
-          case cmd =>
-            controllerInterfaceActor ! GalilRequest(cmd, runId, setup.maybeObsId, cmdMapEntry.get, setup)
-        }
+        // Send all oneway commands as GalilRequest (publishDataRecord removed)
+        controllerInterfaceActor ! GalilRequest(cmdString.get, runId, setup.maybeObsId, cmdMapEntry.get, setup)
       case _ => // Only Setups handled
     }
   }

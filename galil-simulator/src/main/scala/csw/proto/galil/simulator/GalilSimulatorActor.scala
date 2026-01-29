@@ -113,7 +113,10 @@ object GalilSimulatorActor {
         cmdString.take(2) match {
           // Core commands
           case `GetDataRecord` =>
-            (ByteString(getDataRecord(simCtx).toByteBuffer), None)
+            // QR returns binary data ending with ':' terminator
+            val dataRecord = ByteString(getDataRecord(simCtx).toByteBuffer)
+            val response = dataRecord ++ ByteString(":")
+            (response, None)
           case `ErrorCode` => (formatReply(tcCmd(cmdString)), None)
           
           // New interface: Program execution commands
@@ -164,7 +167,7 @@ object GalilSimulatorActor {
           case `SetMotorPosition` =>
             (formatReply(None), Some(setMotorPosition(simCtx, timer, cmdString)))
           case cmd if axixCmds.contains(cmd) => genericCmd(simCtx, timer, cmdString)
-          case _                             => (formatReply(None), None)
+          case _                             => (formatReply(None, isError = true), None)  // Return ? for unknown commands
         }
       replyTo ! response
       maybeNewBehavior.getOrElse(Behaviors.same)

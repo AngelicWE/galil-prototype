@@ -15,11 +15,9 @@ import scala.concurrent.duration._
  * - Command send/receive protocol
  * - Response parsing and error detection
  * - QR polling management
+ * - File operation protocol (UL/DL)
  * - Buffer synchronization
  * - Thread coordination
- * 
- * Note: UL/DL (upload/download) tests are in TestProgramUploadDownload
- * as they require real hardware and won't work with the simulator.
  * 
  * Prerequisites:
  * - Galil controller or simulator must be running
@@ -28,13 +26,20 @@ import scala.concurrent.duration._
 class ControllerInterfaceActorTest extends AnyFunSuite with Matchers with BeforeAndAfterAll {
 
   // Configure controller connection
-  private val galilHost = sys.props.getOrElse("galil.host", "192.168.86.41")
-  private val galilPort = sys.props.getOrElse("galil.port", "23").toInt
+  // Try: 1) System property, 2) Environment variable, 3) Default to simulator
+  private val galilHost = sys.props.get("galil.host")
+    .orElse(sys.env.get("GALIL_HOST"))
+    .getOrElse("127.0.0.1")
+  
+  private val galilPort = sys.props.get("galil.port")
+    .orElse(sys.env.get("GALIL_PORT"))
+    .getOrElse("8888").toInt
   
   private var galilIo: GalilIo = uninitialized
 
   override def beforeAll(): Unit = {
     super.beforeAll()
+    println(s"ControllerInterfaceActorTest: Connecting to Galil at $galilHost:$galilPort")
     galilIo = GalilIoTcp(galilHost, galilPort)
   }
 
@@ -180,7 +185,7 @@ class ControllerInterfaceActorTest extends AnyFunSuite with Matchers with Before
     // Send QR
     galilIo.send("QR")
     
-    // Check buffer state
+    // Check buffer
     val residual = galilIo.drainAndShowBuffer()
     
     // Should be clean after QR
@@ -220,16 +225,11 @@ class ControllerInterfaceActorTest extends AnyFunSuite with Matchers with Before
   test("should handle QR polling cycle") {
     info("Testing QR polling cycle")
     
-    // Execute QR - protocol should handle everything cleanly
-    
-    
     // Execute QR
     val responses = galilIo.send("QR")
     
     responses should have size 1
     val (_, dataRecord) = responses.head
-    
-    info(s"QR response size: ${dataRecord.length} bytes")
     
     // Should be 226 or 227 bytes (varies by controller model)
     dataRecord.length should (be(226) or be(227))
@@ -250,22 +250,13 @@ class ControllerInterfaceActorTest extends AnyFunSuite with Matchers with Before
   test("should distinguish QR from text commands") {
     info("Testing QR vs text command differentiation")
     
-    // Text command - protocol handles everything
-    
-    
     // Text command
     val textResp = galilIo.send("MG TIME")
     val textData = textResp.head._2
     
-    // Binary command - protocol handles everything
-    
-    
     // Binary command
     val binaryResp = galilIo.send("QR")
     val binaryData = binaryResp.head._2
-    
-    info(s"Text response: ${textData.length} bytes")
-    info(s"QR response: ${binaryData.length} bytes")
     
     // QR should be 226 or 227 bytes (varies by controller model)
     binaryData.length should (be(226) or be(227))
