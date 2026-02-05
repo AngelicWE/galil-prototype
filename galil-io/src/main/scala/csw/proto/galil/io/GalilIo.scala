@@ -243,6 +243,7 @@ case class GalilIoTcp(host: String = "127.0.0.1", port: Int = 8888) extends Gali
 
   // XXX TODO: Error handling when there is no device available!
   socket.connect(socketAddress, timeoutInMs)
+  socket.setSoTimeout(timeoutInMs)  // Set read timeout to prevent infinite blocking
 
   override def write(sendBuf: Array[Byte]): Unit = {
     socket.getOutputStream.write(sendBuf)

@@ -17,7 +17,6 @@ import csw.proto.galil.hcd.GalilCommandMessage.{GalilCommand, GalilRequest}
 import csw.proto.galil.io.DataRecord
 import csw.time.core.models.UTCTime
 
-import scala.compiletime.uninitialized
 import scala.concurrent.ExecutionContextExecutor
 
 // Add messages here...
@@ -34,8 +33,8 @@ object GalilCommandMessage {
       cmdMapEntry: CommandMapEntry,
       setup: Setup
   ) extends GalilCommandMessage
-
-  // StatusMonitor protocol
+  
+  // Messages for StatusMonitor to request QR data
   case class GetQR(replyTo: ActorRef[QRResult]) extends GalilCommandMessage
   case class QRResult(dataRecord: DataRecord) extends GalilCommandMessage
 
@@ -51,54 +50,86 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
   private val config                        = ConfigFactory.load("GalilCommands.conf")
   private val adapter                       = new CSWDeviceAdapter(config)
   
-  // Create InternalStateActor first
+  // ========================================
+  // State Management Actors
+  // ========================================
+  
+  // 1. InternalStateActor - Central state repository (no dependencies)
   private val internalStateActor: ActorRef[InternalStateActor.Command] =
-    ctx.spawn(InternalStateActor(), "InternalStateActor")
+    ctx.spawn(InternalStateActor.apply(), "InternalStateActor")
   
-  // Create StatusMonitor (will be initialized with controllerInterface later)
-  // Use Scala 3 uninitialized instead of deprecated _
-  private var statusMonitor: ActorRef[StatusMonitor.Command] = uninitialized
-  
-  private val controllerInterfaceActor: ActorRef[GalilCommandMessage] =
+  // 2. StatusMonitor - 10 Hz QR polling (needs ControllerInterfaceActor)
+  // Note: lazy val to handle circular dependency with ControllerInterfaceActor
+  private lazy val statusMonitor: ActorRef[StatusMonitor.Command] =
     ctx.spawn(
-      ControllerInterfaceActor
-        .behavior(
-          getGalilConfig,
-          config,
-          commandResponseManager,
-          adapter,
-          loggerFactory,
-          componentInfo.prefix,
-          cswCtx.currentStatePublisher,
-          ctx.system.ignoreRef[StatusMonitor.Command]  // Temporary placeholder
-        ),
+      StatusMonitor.apply(
+        controllerInterfaceActor,
+        internalStateActor
+        // pollingRateHz defaults to 10.0
+      ),
+      "StatusMonitor"
+    )
+  
+  // 3. Command Execution Actor (needs StatusMonitor)
+  // Note: lazy val to handle circular dependency with StatusMonitor
+  private lazy val controllerInterfaceActor: ActorRef[GalilCommandMessage] =
+    ctx.spawn(
+      ControllerInterfaceActor.behavior(
+        getGalilConfig,
+        config,
+        commandResponseManager,
+        adapter,
+        loggerFactory,
+        componentInfo.prefix,
+        cswCtx.currentStatePublisher,
+        statusMonitor  // Now we can pass this!
+      ),
       "ControllerInterfaceActor"
     )
   
-  // Now create StatusMonitor with real controllerInterfaceActor ref
-  statusMonitor = ctx.spawn(
-    StatusMonitor(
-      controllerInterfaceActor,
-      internalStateActor,
-      pollingRateHz = 10.0  // 10Hz polling
-    ),
-    "StatusMonitor"
-  )
+  // 3. CurrentStatePublisher - CSW current state publications
+  private val currentStatePublisher: ActorRef[CurrentStatePublisherActor.Command] =
+    ctx.spawn(
+      CurrentStatePublisherActor.behavior(
+        componentInfo.prefix,
+        internalStateActor,
+        cswCtx.currentStatePublisher,  // Pass CSW's publisher directly!
+        loggerFactory.getLogger
+      ),
+      "CurrentStatePublisher"
+    )
 
+  // ========================================
+  // Lifecycle Handlers
+  // ========================================
+  
   override def initialize(): Unit = {
-    log.info("GalilHcd initialized with StatusMonitor (10Hz QR polling)")
-    log.debug("Initialize called")
+    log.info("Initializing Galil HCD")
+    
+    // Start status monitoring
+    statusMonitor ! StatusMonitor.SetPolling(enabled = true)
+    
+    log.info("Galil HCD initialized")
   }
 
   override def onShutdown(): Unit = {
-    log.debug("onShutdown called")
-    // StatusMonitor will be stopped automatically when context stops
+    log.info("Shutting down Galil HCD")
+    
+    // Stop all actors gracefully
+    statusMonitor ! StatusMonitor.SetPolling(enabled = false)
+    currentStatePublisher ! CurrentStatePublisherActor.Shutdown
+    
+    log.info("Galil HCD shut down")
   }
 
   override def onGoOffline(): Unit = log.debug("onGoOffline called")
 
   override def onGoOnline(): Unit = log.debug("onGoOnline called")
 
+  // ========================================
+  // Command Validation and Execution
+  // ========================================
+  
   override def validateCommand(runId: Id, controlCommand: ControlCommand): ValidateCommandResponse = {
     log.debug(s"validateSubmit called: $controlCommand")
     controlCommand match {
@@ -141,7 +172,7 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
       case setup: Setup =>
         val cmdMapEntry = adapter.getCommandMapEntry(setup)
         val cmdString   = adapter.validateSetup(setup, cmdMapEntry.get)
-        // Send all oneway commands as GalilRequest (publishDataRecord removed)
+        // Send all oneway commands to ControllerInterfaceActor
         controllerInterfaceActor ! GalilRequest(cmdString.get, runId, setup.maybeObsId, cmdMapEntry.get, setup)
       case _ => // Only Setups handled
     }

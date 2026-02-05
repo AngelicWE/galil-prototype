@@ -19,7 +19,8 @@ lazy val `galil-root` = project
 lazy val `galil-hcd` = project
   .enablePlugins(DeployApp)
   .settings(
-    libraryDependencies ++= GalilHcd
+    libraryDependencies ++= GalilHcd,
+    Test / fork := false  // Run tests in same JVM - allows -D flags to work
   )
   .dependsOn(`galil-io`)
 
@@ -65,3 +66,9 @@ lazy val `galil-deploy` = project
     libraryDependencies ++= GalilDeploy
   )
 
+// Pass system properties to forked test JVMs
+Test / fork := true
+Test / javaOptions ++= {
+  val props = sys.props.filter { case (k, _) => k.startsWith("galil.") }
+  props.map { case (k, v) => s"-D$k=$v" }.toSeq
+}
