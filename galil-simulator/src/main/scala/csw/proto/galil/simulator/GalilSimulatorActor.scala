@@ -17,6 +17,7 @@ object GalilSimulatorActor {
   // New interface commands (embedded program execution)
   val ExecuteProgram       = "XQ"
   val HaltExecution        = "HX"
+  val Identify             = "ID"
   val SetBit               = "SB"
   val ClearBit             = "CB"
   val AnalogOutput         = "AO"
@@ -110,8 +111,15 @@ object GalilSimulatorActor {
 
     try {
       val (response, maybeNewBehavior) =
-        cmdString.take(2) match {
+        if (cmdString.isEmpty) {
+          // Empty command - real Galil responds with just the prompt ":"
+          (formatReply(None), None)
+        } else cmdString.take(2) match {
           // Core commands
+          case `Identify` =>
+            // ID - Return controller identification (simulated DMC-50080, 8-axis controller)
+            val idResponse = "FW, DMC50080 Rev 1.0sim\r\nDMC, 50000, Rev 0\r\nCMB, 00000, 0.0v, Rev 0\r\nAMP1, 00000, Rev 0"
+            (formatReply(idResponse), None)
           case `GetDataRecord` =>
             // QR returns binary data ending with ':' terminator
             val dataRecord = ByteString(getDataRecord(simCtx).toByteBuffer)

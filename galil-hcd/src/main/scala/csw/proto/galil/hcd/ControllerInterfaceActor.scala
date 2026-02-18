@@ -28,6 +28,21 @@ import scala.util.{Failure, Success}
  */
 private[hcd] object ControllerInterfaceActor {
 
+  /**
+   * Parsed identity of a Galil controller from the ID command response.
+   *
+   * @param firmware  firmware identifier, e.g. "DMC50040 Rev 1.2a"
+   * @param model     DMC model number, e.g. "50000"
+   * @param axisCount number of axes supported (extracted from firmware model number), -1 if unknown
+   * @param rawResponse full raw response from the ID command
+   */
+  case class ControllerIdentity(
+    firmware: String,
+    model: String,
+    axisCount: Int,
+    rawResponse: String
+  )
+
   def behavior(
       galilConfig: GalilConfig,
       config: Config,
@@ -35,8 +50,7 @@ private[hcd] object ControllerInterfaceActor {
       adapter: CSWDeviceAdapter,
       loggerFactory: LoggerFactory,
       galilPrefix: Prefix,
-      currentStatePublisher: CurrentStatePublisher,
-      statusMonitor: ActorRef[StatusMonitor.Command]
+      currentStatePublisher: CurrentStatePublisher
   ): Behavior[GalilCommandMessage] =
     Behaviors.withTimers { timers =>
       Behaviors.setup { ctx =>
@@ -65,17 +79,59 @@ private[hcd] object ControllerInterfaceActor {
           resp
         }
 
-        // Check that there is a Galil device on the other end of the socket
-        def verifyGalil(): Unit = {
-          val s = galilSend("")
-          if (s.nonEmpty)
+        /**
+         * Identify the controller by sending the ID command.
+         * Runs during actor setup to verify the connection and log hardware identity.
+         *
+         * Real Galil response example (DMC-4143):
+         *   FW, DMC50040 Rev 1.2a
+         *   DMC, 50000, Rev 0
+         *   CMB, 41023, 3.3v, Rev 1
+         *   AMP1, 44020, Rev 0
+         *
+         * The firmware model number encodes the number of axes:
+         *   DMC-500x0 where x = axis count (e.g., 50040 = 4 axes, 50080 = 8 axes)
+         *
+         * @return ControllerIdentity with parsed fields
+         * @throws IOException if the controller does not respond or returns unexpected data
+         */
+        def identifyController(): ControllerIdentity = {
+          val response = galilSend("ID")
+          if (response.isEmpty || response == "?")
             throw new IOException(
-              s"Unexpected response to empty galil command: '$s': " +
-                s"Check if Galil device is really located at ${galilConfig.host}:${galilConfig.port}"
+              s"Controller at ${galilConfig.host}:${galilConfig.port} did not respond to ID command"
             )
+
+          val lines = response.split("\r?\n").map(_.trim).filter(_.nonEmpty)
+
+          // Parse firmware line: "FW, DMC50040 Rev 1.2a"
+          val fwLine = lines.find(_.startsWith("FW,"))
+          val firmware = fwLine.map(_.stripPrefix("FW,").trim).getOrElse("unknown")
+
+          // Parse DMC model line: "DMC, 50000, Rev 0"
+          val dmcLine = lines.find(_.startsWith("DMC,"))
+          val model = dmcLine.map(_.stripPrefix("DMC,").trim.split(",").head.trim).getOrElse("unknown")
+
+          // Extract axis count from firmware model number: DMC500x0 -> x is the axis digit
+          val axisCount = fwLine.flatMap { fw =>
+            val pattern = """DMC5\d{2}(\d)0""".r
+            pattern.findFirstMatchIn(fw).map(_.group(1).toInt)
+          }.getOrElse(-1) // -1 = unknown
+
+          val identity = ControllerIdentity(
+            firmware = firmware,
+            model = model,
+            axisCount = axisCount,
+            rawResponse = response
+          )
+
+          log.info(s"Controller identified: firmware=$firmware, model=DMC-$model, axes=$axisCount")
+          lines.foreach(line => log.info(s"  ID: $line"))
+
+          identity
         }
 
-        verifyGalil()
+        val controllerIdentity = identifyController()
 
         def handleDataRecordResponse(dr: DataRecord, runId: Id, maybeObsId: Option[ObsId], cmdMapEntry: CommandMapEntry): Unit = {
           log.debug(s"handleDataRecordResponse $dr")
@@ -96,8 +152,7 @@ private[hcd] object ControllerInterfaceActor {
         def handleUploadProgram(filename: String, runId: Id, maybeObsId: Option[ObsId], cmdMapEntry: CommandMapEntry): Unit = {
           log.info(s"Uploading program from file: $filename")
           
-          // Pause StatusMonitor QR polling during file operation to prevent buffer corruption
-          statusMonitor ! StatusMonitor.PauseQRPolling
+          // NOTE: StatusMonitor QR polling is paused by GalilHcd before this is called
           
           try {
             // Small delay to let any in-flight QR command complete
@@ -165,17 +220,15 @@ private[hcd] object ControllerInterfaceActor {
                 )
             }
           } finally {
-            // Always resume StatusMonitor QR polling
+            // NOTE: StatusMonitor QR polling is resumed by GalilHcd after this completes
             Thread.sleep(100)
-            statusMonitor ! StatusMonitor.ResumeQRPolling
           }
         }
 
         def handledownloadProgram(filename: String, runId: Id, maybeObsId: Option[ObsId], cmdMapEntry: CommandMapEntry): Unit = {
           log.info(s"Downloading programs to file: $filename")
           
-          // Pause StatusMonitor QR polling during file operation
-          statusMonitor ! StatusMonitor.PauseQRPolling
+          // NOTE: StatusMonitor QR polling is paused by GalilHcd before this is called
           
           try {
             // Small delay to let any in-flight QR complete
@@ -227,9 +280,8 @@ private[hcd] object ControllerInterfaceActor {
                 Error(runId, s"Download failed: ${ex.getMessage}")
               )
           } finally {
-            // Always resume StatusMonitor QR polling
+            // NOTE: StatusMonitor QR polling is resumed by GalilHcd after this completes
             Thread.sleep(100)
-            statusMonitor ! StatusMonitor.ResumeQRPolling
           }
         }
 
@@ -240,6 +292,27 @@ private[hcd] object ControllerInterfaceActor {
         }
 
         Behaviors.receiveMessage[GalilCommandMessage] {
+          // Return controller identity — confirms actor setup is complete
+          case GalilCommandMessage.GetIdentity(replyTo) =>
+            replyTo ! controllerIdentity
+            Behaviors.same
+
+          // Download current embedded program from controller (UL command)
+          case GalilCommandMessage.DownloadProgram(replyTo) =>
+            try {
+              log.info("Downloading program from controller (UL)")
+              val program = galilIo.synchronized {
+                galilIo.downloadProgram()
+              }
+              log.info(s"Downloaded program: ${program.length} characters, ${program.linesIterator.size} lines")
+              replyTo ! GalilCommandMessage.DownloadProgramResult(program)
+            } catch {
+              case ex: Exception =>
+                log.error(s"Download failed: ${ex.getMessage}")
+                replyTo ! GalilCommandMessage.DownloadProgramResult("", error = Some(ex.getMessage))
+            }
+            Behaviors.same
+
           // GetQR handler for StatusMonitor integration
           case GalilCommandMessage.GetQR(replyTo) =>
             try {

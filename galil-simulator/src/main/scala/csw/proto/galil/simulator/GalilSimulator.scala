@@ -75,7 +75,13 @@ case class GalilSimulator(host: String = "127.0.0.1", port: Int = 8888, debug: B
         frame
       }
       // handle multiple commands on a line separated by ";"
-      .mapConcat(_.utf8String.split(";").map(_.trim).filter(_.nonEmpty).map(ByteString(_)).toList)
+      // Note: empty commands are valid Galil protocol (returns prompt ":") - don't filter them out
+      .mapConcat { frame =>
+        val parts = frame.utf8String.split(";").map(_.trim)
+        // If original frame was empty (just \r\n), keep one empty string for the prompt response
+        if (parts.forall(_.isEmpty)) List(ByteString(""))
+        else parts.filter(_.nonEmpty).map(ByteString(_)).toList
+      }
       .mapAsync(1) { cmd =>
         processCommand(cmd, conn).map { response =>
           // Add small delay to simulate real Galil processing time

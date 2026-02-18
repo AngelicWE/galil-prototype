@@ -163,15 +163,13 @@ class StatusMonitor(
     if pollingEnabled then
       context.log.debug("Polling controller for QR data")
       
+      // Create adapter to convert GalilCommandMessage.QRResult → StatusMonitor.QRResponse
+      val adapter = context.messageAdapter[GalilCommandMessage.QRResult] {
+        case GalilCommandMessage.QRResult(dr: DataRecord) => QRResponse(dr)
+      }
+      
       // Request QR from ControllerInterface
-      // NOTE: Actual implementation depends on ControllerInterfaceActor protocol
-      // For now, we'll use a simplified approach - this will need to be updated
-      // when ControllerInterfaceActor protocol is finalized
-      
-      // TODO: Replace with actual ControllerInterface protocol
-      // controllerInterface ! ControllerInterfaceActor.GetQR(context.self.narrow[QRResponse])
-      
-      context.log.warn("QR request not yet implemented - waiting for ControllerInterface protocol")
+      controllerInterface ! GalilCommandMessage.GetQR(adapter)
     
     Behaviors.same
   

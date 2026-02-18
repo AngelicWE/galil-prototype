@@ -382,3 +382,82 @@ class StatusMonitorTest extends AnyFunSuite with Matchers with BeforeAndAfterAll
         state.get.velocity should be (expectedVel)
     }
   }
+  
+  // ========================================
+  // CRITICAL: Verify Actual Polling Works
+  // ========================================
+  
+  test("StatusMonitor should send GetQR requests to ControllerInterface") {
+    val internalState = testKit.spawn(InternalStateActor(
+      HcdState()
+        .initializeAxis(Axis.A)
+        .initializeAxis(Axis.B)
+    ))
+    
+    // Create probe to receive GetQR messages
+    val controllerProbe = testKit.createTestProbe[GalilCommandMessage]()
+    
+    // Create StatusMonitor with 10Hz polling (100ms period)
+    val statusMonitor = testKit.spawn(
+      StatusMonitor(controllerProbe.ref, internalState, pollingRateHz = 10.0)
+    )
+    
+    // Wait for timer to fire (100ms + margin)
+    Thread.sleep(150)
+    
+    // Verify ControllerInterface received GetQR request
+    val getQrMessage = controllerProbe.receiveMessage(200.millis)
+    getQrMessage shouldBe a[GalilCommandMessage.GetQR]
+    
+    // Extract replyTo from GetQR message
+    val replyTo = getQrMessage.asInstanceOf[GalilCommandMessage.GetQR].replyTo
+    
+    // Send QR response back through the replyTo actor
+    val dataRecord = createTestDataRecord(
+      motorPositionA = 98765,
+      velocityA = 1234
+    )
+    replyTo ! GalilCommandMessage.QRResult(dataRecord)
+    
+    // Give StatusMonitor time to process and update InternalState
+    Thread.sleep(100)
+    
+    // Verify InternalState was updated
+    val probe = testKit.createTestProbe[Option[AxisState]]()
+    internalState ! InternalStateActor.GetAxisState(Axis.A, probe.ref)
+    val state = probe.receiveMessage()
+    
+    state should not be (None)
+    state.get.position should be (98765.0)
+    state.get.velocity should be (1234.0)
+    
+    // Verify polling continues - should get another GetQR within 150ms
+    val getQrMessage2 = controllerProbe.receiveMessage(200.millis)
+    getQrMessage2 shouldBe a[GalilCommandMessage.GetQR]
+  }
+  
+  test("StatusMonitor should pause polling when PauseQRPolling is sent") {
+    val internalState = testKit.spawn(InternalStateActor(HcdState()))
+    val controllerProbe = testKit.createTestProbe[GalilCommandMessage]()
+    
+    val statusMonitor = testKit.spawn(
+      StatusMonitor(controllerProbe.ref, internalState, pollingRateHz = 10.0)
+    )
+    
+    // Verify polling is active
+    controllerProbe.receiveMessage(200.millis) shouldBe a[GalilCommandMessage.GetQR]
+    
+    // Pause polling
+    statusMonitor ! StatusMonitor.PauseQRPolling
+    Thread.sleep(50) // Let pause message process
+    
+    // Verify no more GetQR messages arrive
+    controllerProbe.expectNoMessage(250.millis)
+    
+    // Resume polling
+    statusMonitor ! StatusMonitor.ResumeQRPolling
+    Thread.sleep(50) // Let resume message process
+    
+    // Verify polling resumes
+    controllerProbe.receiveMessage(200.millis) shouldBe a[GalilCommandMessage.GetQR]
+  }
