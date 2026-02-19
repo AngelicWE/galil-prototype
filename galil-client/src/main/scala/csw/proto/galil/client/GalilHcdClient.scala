@@ -34,7 +34,7 @@ case class GalilHcdClient(source: Prefix, locationService: LocationService)(impl
 
   implicit val timeout: Timeout = Timeout(10.seconds)
 
-  private val connection = PekkoConnection(ComponentId(Prefix("csw.galil.hcd.GalilHcd"), HCD))
+  private val connection = PekkoConnection(ComponentId(Prefix("aps.ICS.HCD.GalilMotion"), HCD))
 
   // Parameter keys for new interface
   private val labelKey: Key[String]         = KeyType.StringKey.make("label")

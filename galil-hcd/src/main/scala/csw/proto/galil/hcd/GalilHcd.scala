@@ -11,7 +11,7 @@ import csw.location.api.models.TrackingEvent
 import csw.params.commands.CommandResponse.{SubmitResponse, ValidateCommandResponse}
 import csw.params.commands._
 import csw.params.core.models.{Id, ObsId}
-import csw.prefix.models.Subsystem.CSW
+import csw.prefix.models.Subsystem
 import csw.proto.galil.hcd.CSWDeviceAdapter.CommandMapEntry
 import csw.proto.galil.hcd.ControllerInterfaceActor.ControllerIdentity
 import csw.proto.galil.hcd.GalilCommandMessage.{GalilCommand, GalilRequest}
@@ -47,6 +47,11 @@ object GalilCommandMessage {
   // Returns the program text as a String
   case class DownloadProgram(replyTo: ActorRef[DownloadProgramResult]) extends GalilCommandMessage
   case class DownloadProgramResult(program: String, error: Option[String] = None) extends GalilCommandMessage
+
+  // Synchronous command execution for CommandHandlerActor
+  // Sends a command string and returns the response (or error)
+  case class SendCommand(commandString: String, replyTo: ActorRef[SendCommandResult]) extends GalilCommandMessage
+  case class SendCommandResult(response: String, error: Option[String] = None)
 
 }
 
@@ -125,6 +130,9 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
   // 3. StatusMonitor - 10 Hz QR polling (created during initialize() after CI actor)
   private var statusMonitor: ActorRef[StatusMonitor.Command] = uninitialized
   
+  // 4. CommandHandlerActor - created during initialize() after CI actor and InternalState are ready
+  private var commandHandlerActor: ActorRef[CommandHandlerActor.Command] = uninitialized
+  
   // 4. CurrentStatePublisher - CSW current state publications
   private val currentStatePublisher: ActorRef[CurrentStatePublisherActor.Command] =
     ctx.spawn(
@@ -189,6 +197,18 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
     )
     statusMonitor ! StatusMonitor.SetPolling(enabled = true)
     log.info("StatusMonitor created - polling at 1Hz")
+
+    // Phase 3b: Create CommandHandlerActor
+    commandHandlerActor = ctx.spawn(
+      CommandHandlerActor.behavior(
+        controllerInterfaceActor,
+        internalStateActor,
+        commandResponseManager,
+        loggerFactory
+      ),
+      "CommandHandlerActor"
+    )
+    log.info("CommandHandlerActor created")
 
     // Phase 4: Hardware-specific initialization
     if (hcdConfig.simulate) {
@@ -542,22 +562,82 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
   override def validateCommand(runId: Id, controlCommand: ControlCommand): ValidateCommandResponse = {
     log.debug(s"validateSubmit called: $controlCommand")
     controlCommand match {
-      case x: Setup =>
-        val cmdMapEntry = adapter.getCommandMapEntry(x)
-        if (cmdMapEntry.isSuccess) {
-          val cmdString = adapter.validateSetup(x, cmdMapEntry.get)
-          if (cmdString.isSuccess) {
-            CommandResponse.Accepted(runId)
+      case setup: Setup =>
+        val commandName = setup.commandName.name
+        
+        // Immediate commands handled by CommandHandlerActor use ICD keys directly
+        if (CommandHandlerActor.isImmediate(commandName)) {
+          validateImmediateCommand(runId, setup) 
+        } else {
+          // Legacy path: validate through CSWDeviceAdapter command map
+          val cmdMapEntry = adapter.getCommandMapEntry(setup)
+          if (cmdMapEntry.isSuccess) {
+            val cmdString = adapter.validateSetup(setup, cmdMapEntry.get)
+            if (cmdString.isSuccess) {
+              CommandResponse.Accepted(runId)
+            }
+            else {
+              CommandResponse.Invalid(runId, CommandIssue.ParameterValueOutOfRangeIssue(cmdString.failed.get.getMessage))
+            }
           }
           else {
-            CommandResponse.Invalid(runId, CommandIssue.ParameterValueOutOfRangeIssue(cmdString.failed.get.getMessage))
+            CommandResponse.Invalid(runId, CommandIssue.OtherIssue(cmdMapEntry.failed.get.getMessage))
           }
-        }
-        else {
-          CommandResponse.Invalid(runId, CommandIssue.OtherIssue(cmdMapEntry.failed.get.getMessage))
         }
       case _: Observe =>
         CommandResponse.Invalid(runId, CommandIssue.UnsupportedCommandIssue("Observe not supported"))
+    }
+  }
+  
+  /**
+   * Validate immediate commands using ICD key definitions.
+   * Checks required parameters are present and axis values are valid.
+   */
+  private def validateImmediateCommand(runId: Id, setup: Setup): ValidateCommandResponse = {
+    import csw.proto.galil.GalilMotionKeys.`ICS.HCD.GalilMotion`._
+
+    try {
+      setup.commandName.name match {
+        case "configAxis" =>
+          // axis is required; all others are optional
+          setup(ConfigAxisCommand.axisKey)
+          CommandResponse.Accepted(runId)
+          
+        case "configRotatingAxis" =>
+          // axis and algorithm are required
+          setup(ConfigRotatingAxisCommand.axisKey)
+          setup(ConfigRotatingAxisCommand.algorithmKey)
+          CommandResponse.Accepted(runId)
+          
+        case "configLinearAxis" =>
+          // axis, upperLimit, lowerLimit are all required
+          setup(ConfigLinearAxisCommand.axisKey)
+          setup(ConfigLinearAxisCommand.upperLimitKey)
+          setup(ConfigLinearAxisCommand.lowerLimitKey)
+          CommandResponse.Accepted(runId)
+          
+        case "setBit" =>
+          // address and value are required
+          setup(SetBitCommand.addressKey)
+          val value = setup(SetBitCommand.valueKey).head
+          if (value != 0 && value != 1) {
+            CommandResponse.Invalid(runId, CommandIssue.ParameterValueOutOfRangeIssue("setBit value must be 0 or 1"))
+          } else {
+            CommandResponse.Accepted(runId)
+          }
+          
+        case "setAO" =>
+          // address and value are required
+          setup(SetAOCommand.addressKey)
+          setup(SetAOCommand.valueKey)
+          CommandResponse.Accepted(runId)
+          
+        case other =>
+          CommandResponse.Invalid(runId, CommandIssue.UnsupportedCommandIssue(s"Unknown immediate command: $other"))
+      }
+    } catch {
+      case _: NoSuchElementException =>
+        CommandResponse.Invalid(runId, CommandIssue.MissingKeyIssue("Required parameter missing"))
     }
   }
 
@@ -565,30 +645,36 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
     log.debug(s"onSubmit called: $controlCommand")
     controlCommand match {
       case setup: Setup =>
-        val cmdMapEntry = adapter.getCommandMapEntry(setup)
-        val cmdString   = adapter.validateSetup(setup, cmdMapEntry.get)
-        
-        // Check if this is a file operation command that needs QR polling paused
         val commandName = setup.commandName.name
-        if (commandName == "uploadProgram" || commandName == "downloadProgram") {
-          log.debug(s"Pausing QR polling for $commandName")
-          statusMonitor ! StatusMonitor.PauseQRPolling
-          Thread.sleep(50) // Brief delay to ensure pause message is processed
+        
+        // Route immediate commands to CommandHandlerActor
+        if (CommandHandlerActor.isImmediate(commandName)) {
+          commandHandlerActor ! CommandHandlerActor.HandleCommand(setup, runId, setup.maybeObsId)
+          CommandResponse.Started(runId)
+        } else {
+          // Existing path for non-immediate commands (file ops, data record, etc.)
+          val cmdMapEntry = adapter.getCommandMapEntry(setup)
+          val cmdString   = adapter.validateSetup(setup, cmdMapEntry.get)
+        
+          // Check if this is a file operation command that needs QR polling paused
+          if (commandName == "uploadProgram" || commandName == "downloadProgram") {
+            log.debug(s"Pausing QR polling for $commandName")
+            statusMonitor ! StatusMonitor.PauseQRPolling
+            Thread.sleep(50) // Brief delay to ensure pause message is processed
+          }
+        
+          // Forward command to ControllerInterfaceActor
+          controllerInterfaceActor ! GalilRequest(cmdString.get, runId, setup.maybeObsId, cmdMapEntry.get, setup)
+        
+          // Resume QR polling after file operation (async)
+          if (commandName == "uploadProgram" || commandName == "downloadProgram") {
+            import scala.concurrent.duration._
+            log.debug(s"Will resume QR polling in 5s after $commandName")
+            ctx.scheduleOnce(5.seconds, statusMonitor, StatusMonitor.ResumeQRPolling)
+          }
+        
+          CommandResponse.Started(runId)
         }
-        
-        // Forward command to ControllerInterfaceActor
-        controllerInterfaceActor ! GalilRequest(cmdString.get, runId, setup.maybeObsId, cmdMapEntry.get, setup)
-        
-        // Resume QR polling after file operation (async)
-        if (commandName == "uploadProgram" || commandName == "downloadProgram") {
-          // Schedule resume after a delay (file operations take time)
-          // Alternative: Could watch for command completion, but this is simpler
-          import scala.concurrent.duration._
-          log.debug(s"Will resume QR polling in 5s after $commandName")
-          ctx.scheduleOnce(5.seconds, statusMonitor, StatusMonitor.ResumeQRPolling)
-        }
-        
-        CommandResponse.Started(runId)
       case x =>
         // Should not happen after validation
         CommandResponse.Error(runId, s"Unexpected submit: $x")
@@ -618,6 +704,6 @@ class GalilHcdHandlers(ctx: ActorContext[TopLevelActorMessage], cswCtx: CswConte
 object GalilHcdApp {
   def main(args: Array[String]): Unit = {
     val defaultConfig = ConfigFactory.load("GalilHcd.conf")
-    ContainerCmd.start("galil.hcd.GalilHcd", CSW, args, Some(defaultConfig))
+    ContainerCmd.start("ICS.HCD.GalilMotion", Subsystem.APS, args, Some(defaultConfig))
   }
 }

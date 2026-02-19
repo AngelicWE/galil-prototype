@@ -12,7 +12,6 @@ import csw.testkit.scaladsl.ScalaTestFrameworkTestKit
 import csw.proto.galil.GalilMotionKeys
 import org.scalatest.funsuite.AnyFunSuiteLike
 import org.scalatest.BeforeAndAfterEach
-import org.scalatest.Ignore  // ← ADDED THIS LINE
 
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration.*
@@ -30,12 +29,10 @@ import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe
  * - Override beforeAll() and call super.beforeAll()
  * - Use FrameworkTestKit to spawn real components
  * - Use CommandService.subscribeCurrentState() to verify publications
- * 
- * NOTE: Temporarily disabled due to FrameworkTestKit cluster formation issue on macOS.
- * See CSW 6.0.0 migration notes. The production code is complete and correct.
- * This is a test infrastructure limitation, not a code issue.
+ *
+ * NOTE: Requires GalilHcdStandalone.conf in test resources and that 
+ * application.conf does NOT override pekko.actor.provider (CSW manages this).
  */
-@Ignore
 class CurrentStatePublisherActorTest
   extends ScalaTestFrameworkTestKit(AlarmServer, EventServer)
   with AnyFunSuiteLike
@@ -136,7 +133,7 @@ class CurrentStatePublisherActorTest
     assert(currentState.exists(CurrentStateAxisACurrentState.axisStateKey))
   }
   
-  test("CurrentState - all axis states should be published") {
+  test("CurrentState - all active axis states should be published") {
     val connection = PekkoConnection(ComponentId(hcdPrefix, ComponentType.HCD))
     val pekkoLocation = Await.result(
       locationService.resolve(connection, 10.seconds),
@@ -145,19 +142,14 @@ class CurrentStatePublisherActorTest
     
     val commandService = CommandServiceFactory.make(pekkoLocation)
     
-    // Test all 8 axes
-    val axisKeys = Seq(
+    // Test active axes (A and B per default GalilHcdConfig.conf)
+    // Inactive axes (C-H) won't have CurrentState published
+    val activeAxisKeys = Seq(
       CurrentStateAxisACurrentState.eventKey,
-      CurrentStateAxisBCurrentState.eventKey,
-      CurrentStateAxisCCurrentState.eventKey,
-      CurrentStateAxisDCurrentState.eventKey,
-      CurrentStateAxisECurrentState.eventKey,
-      CurrentStateAxisFCurrentState.eventKey,
-      CurrentStateAxisGCurrentState.eventKey,
-      CurrentStateAxisHCurrentState.eventKey
+      CurrentStateAxisBCurrentState.eventKey
     )
     
-    axisKeys.foreach { eventKey =>
+    activeAxisKeys.foreach { eventKey =>
       val probe = TestProbe[CurrentState]()
       commandService.subscribeCurrentState(
         Set(StateName(eventKey.eventName.name)),

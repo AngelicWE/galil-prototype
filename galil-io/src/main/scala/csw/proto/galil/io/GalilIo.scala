@@ -73,8 +73,18 @@ abstract class GalilIo {
     val cmds    = cmd.split(';')
     val sendBuf = s"$cmd\r\n".getBytes()
     write(sendBuf)
-    val result = for (c <- cmds) yield (c, receiveReplies())
-    result.toList
+    
+    if (cmds.length == 1) {
+      // Single command — use existing receiveReplies() directly
+      List((cmds.head, receiveReplies()))
+    } else {
+      // Compound command — collect all responses, then pair with commands.
+      // Galil sends one ":" per sub-command, but they may arrive in a single TCP packet
+      // (e.g. "speed[0]=500;accel[0]=9216" returns "::" as one read).
+      // We read until we have the expected number of colon-delimited responses.
+      val allResponses = receiveCompoundReplies(cmds.length)
+      cmds.zip(allResponses).toList
+    }
   }
 
   /**
@@ -138,6 +148,63 @@ abstract class GalilIo {
     
     // Step 3: Send terminator - controller responds with ":" only now
     sendAndWaitForPrompt("\\")
+  }
+
+  // Receives multiple replies for a compound command (semicolon-separated).
+  // Galil sends one ":" per sub-command, but for commands that don't return data
+  // (like variable assignments), multiple ":" may arrive in a single TCP read.
+  // This method accumulates data and splits on ":" boundaries until we have
+  // the expected number of responses.
+  //
+  // Response formats:
+  //   Assignment (speed[0]=500):   ":"
+  //   Query (MG speed[0]):         "500.0000\r\n:"
+  //   Error:                       "?"
+  //
+  // So a compound like "speed[0]=500;MG speed[0]" returns ":\r\n500.0000\r\n:"
+  // and "speed[0]=500;accel[0]=9216" returns "::"
+  private def receiveCompoundReplies(expectedCount: Int): Array[ByteString] = {
+    var accumulated = ByteString.empty
+    var responses = Array.empty[ByteString]
+    
+    while (responses.length < expectedCount) {
+      val data = read()
+      if (data.isEmpty) {
+        // Timeout or connection closed — return what we have, padded with empty
+        return responses.padTo(expectedCount, ByteString.empty)
+      }
+      accumulated = accumulated ++ data
+      
+      // Split accumulated data on ":" boundaries
+      responses = splitResponses(accumulated)
+    }
+    
+    responses.take(expectedCount)
+  }
+
+  // Split raw Galil response data into individual responses.
+  // Each response is terminated by ":". Data responses include "\r\n" before the ":".
+  // We split on ":" and clean up each segment.
+  // Split raw Galil response data into individual responses.
+  // Each response is terminated by ":". Data responses include "\r\n" before the ":".
+  // We split on ":" and clean up each segment.
+  //
+  // Java's String.split(":") drops trailing empty strings, so ":::" returns Array().
+  // We must use split(":", -1) to preserve them: ":::" → Array("", "", "", "")
+  private def splitResponses(data: ByteString): Array[ByteString] = {
+    val str = data.utf8String
+    if (!str.endsWith(":")) return Array.empty  // incomplete response
+    
+    val parts = str.split(":", -1)  // -1 preserves trailing empty strings
+    // For ":::" → ["", "", "", ""]  (4 parts, 3 responses)
+    // For "500.0000\r\n:" → ["500.0000\r\n", ""]  (2 parts, 1 response)
+    // For ":500.0000\r\n:" → ["", "500.0000\r\n", ""]  (3 parts, 2 responses)
+    // Last element is always "" (after final ":"), so drop it.
+    // Remaining elements are the response data (one per sub-command).
+    val responses = parts.dropRight(1)  // drop trailing empty after last ":"
+    responses.map { part =>
+      ByteString(part.stripSuffix("\r\n").stripSuffix("\r"))
+    }
   }
 
   // Receives a reply (up to endMarker) for the given command and returns the result

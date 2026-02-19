@@ -313,6 +313,33 @@ private[hcd] object ControllerInterfaceActor {
             }
             Behaviors.same
 
+          // Synchronous command execution for CommandHandlerActor
+          // Supports compound commands (semicolon-separated) which return multiple responses
+          case GalilCommandMessage.SendCommand(commandString, replyTo) =>
+            try {
+              log.debug(s"SendCommand: $commandString")
+              val responses = galilIo.synchronized {
+                galilIo.send(commandString)
+              }
+              // Check for errors in any sub-command response
+              val errorResponse = responses.find { case (cmd, bs) =>
+                bs.utf8String.trim.startsWith("?")
+              }
+              errorResponse match {
+                case Some((cmd, bs)) =>
+                  replyTo ! GalilCommandMessage.SendCommandResult("", 
+                    error = Some(s"Command '$cmd' rejected: ${bs.utf8String.trim}"))
+                case None =>
+                  val allResponses = responses.map(_._2.utf8String.trim).mkString("; ")
+                  replyTo ! GalilCommandMessage.SendCommandResult(allResponses)
+              }
+            } catch {
+              case ex: Exception =>
+                log.error(s"SendCommand failed: ${ex.getMessage}")
+                replyTo ! GalilCommandMessage.SendCommandResult("", error = Some(ex.getMessage))
+            }
+            Behaviors.same
+
           // GetQR handler for StatusMonitor integration
           case GalilCommandMessage.GetQR(replyTo) =>
             try {
